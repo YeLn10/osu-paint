@@ -245,6 +245,57 @@ class DesktopVideoTests(unittest.TestCase):
         self.app.plan["notes"] = IndexedOnly(self.app.plan["notes"])
         self.app._draw_preview()
 
+    def test_music_follows_play_pause_seek_and_project_replacement(self):
+        result = video_result()
+        self.app._apply_video(result)
+        with patch.object(self.app, "audio_player") as player:
+            player.position_ms.return_value = 2137
+            self.app.toggle_play()
+            player.play.assert_called_once_with(result["audio"], 2000)
+            self.app.root.after_cancel(self.app.tick_job)
+            self.app._tick()
+            self.assertEqual(self.app.seek_time.get(), 2137)
+            self.app.toggle_play()
+            self.assertFalse(self.app.playing)
+            player.stop.assert_called()
+            self.app.seek_time.set(2500)
+            self.app._seek_changed("2500")
+            self.app.toggle_play()
+            player.play.assert_called_with(result["audio"], 2500)
+            self.app.seek_selected()
+            self.assertFalse(self.app.playing)
+            self.assertEqual(self.app.seek_time.get(), 2000)
+            self.app.toggle_play()
+            self.app.load_text("#", keep_video=False)
+            self.assertFalse(self.app.playing)
+            self.assertIsNone(self.app.audio_data)
+            player.stop.assert_called()
+
+    def test_audio_end_keeps_preview_running_until_visual_end(self):
+        self.app._apply_video(video_result())
+        with patch.object(self.app, "audio_player") as player:
+            player.position_ms.return_value = None
+            self.app.toggle_play()
+            self.app.last_tick -= 0.1
+            self.app.root.after_cancel(self.app.tick_job)
+            self.app._tick()
+            self.assertGreater(self.app.seek_time.get(), 2090)
+            self.assertTrue(self.app.playing)
+            self.app.last_tick -= 10
+            self.app.root.after_cancel(self.app.tick_job)
+            self.app._tick()
+            self.assertFalse(self.app.playing)
+            player.stop.assert_called()
+
+    def test_audio_failure_keeps_visual_preview_available(self):
+        self.app._apply_video(video_result())
+        with patch.object(self.app, "audio_player") as player:
+            player.play.side_effect = RuntimeError("音频设备不可用")
+            self.app.toggle_play()
+            self.assertTrue(self.app.playing)
+            self.assertIn("音频设备不可用", self.app.status.get())
+            self.assertIn("无声预览", self.app.status.get())
+
 
 if __name__ == "__main__":
     unittest.main()

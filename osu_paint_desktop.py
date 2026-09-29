@@ -14,6 +14,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from osu_paint import Point, Timeline, compile_frames, number, parse_frames, write_output
 from osu_paint_video import ImportCancelled, import_video as read_video, validate_video_options
+from osu_paint_audio import AudioPreview
 
 
 HEART = [".##.##.", "#######", "#######", ".#####.", "..###..", "...#..."]
@@ -45,6 +46,8 @@ class PaintApp:
         self.import_cancel = threading.Event()
         self.video = None
         self.audio_data = None
+        self.audio_player = AudioPreview()
+        self.root.bind("<Destroy>", self._destroy_audio, add="+")
         self.preview_job = None
         self.export_results = queue.Queue()
         self.last_output = None
@@ -522,7 +525,7 @@ class PaintApp:
             inputs.append(entry)
         ttk.Label(panel, text="亮部转为音符，暗部留空；画面缩放到所填列数 × 行数。\n"
                   "自动启用极速清场和逐帧时间，音乐同时导入，无音轨则使用静音。\n"
-                  "较高 FPS / 分辨率会产生更多音符；桌面预览暂不播放音乐。",
+                  "较高 FPS / 分辨率会产生更多音符；桌面预览会同步播放音乐。",
                   style="Muted.TLabel", wraplength=480).grid(row=5, column=0, columnspan=2, sticky="w", pady=(12, 8))
         self.import_status = tk.StringVar(value="导入会替换当前画布；失败或取消时保留原项目。")
         ttk.Label(panel, textvariable=self.import_status, wraplength=480, style="Muted.TLabel").grid(
@@ -650,7 +653,12 @@ class PaintApp:
 
     def _stop(self):
         self.playing = False
+        self.audio_player.stop()
         self.play_button.configure(text="▶ 播放")
+
+    def _destroy_audio(self, event):
+        if event.widget == self.root:
+            self.audio_player.close()
 
     def _schedule_preview(self, *args):
         self._stop()
@@ -759,10 +767,18 @@ class PaintApp:
         if self.plan is None:
             return
         if self.playing:
+            position = self.audio_player.position_ms()
+            if position is not None:
+                self.seek_time.set(min(self.seek_max, position))
             self._stop()
+            self._draw_preview()
         else:
             if self.seek_time.get() >= self.seek_max:
                 self.seek_time.set(self.seek_min)
+            try:
+                self.audio_player.play(self.audio_data, self.seek_time.get())
+            except RuntimeError as error:
+                self._status(f"{error} 画面继续无声预览。", error=True)
             self.playing = True
             self.last_tick = time.perf_counter()
             self.play_button.configure(text="Ⅱ 暂停")
@@ -772,7 +788,9 @@ class PaintApp:
             self._poll_video_import()
         if self.playing and self.plan is not None:
             now = time.perf_counter()
-            current = min(self.seek_max, self.seek_time.get() + (now - self.last_tick) * 1000)
+            position = self.audio_player.position_ms()
+            current = min(self.seek_max, position if position is not None else
+                          self.seek_time.get() + (now - self.last_tick) * 1000)
             self.last_tick = now
             self.seek_time.set(current)
             if current >= self.seek_max:
