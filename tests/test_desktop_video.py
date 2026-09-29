@@ -74,6 +74,68 @@ class DesktopVideoTests(unittest.TestCase):
         self.assertIsNone(self.app.import_dialog)
         self.assertEqual(self.app.plan, result["plan"])
 
+    def test_frame_preview_keeps_project_and_passes_all_conversion_settings(self):
+        before = copy.deepcopy(self.app._project_data())
+        self.open_video_dialog()
+        self.app.video_frame_index.set("3")
+        self.app.video_fields["threshold"].set("90")
+        self.app.video_fields["brightness"].set("20")
+        self.app.video_fields["contrast"].set("1.5")
+        self.app.video_invert.set(True)
+        self.app.video_fit.set("等比裁剪")
+        preview = {"frame": [".#", "#."], "source_ppm": b"P6\n1 1\n255\n\xff\xff\xff",
+                   "frame_index": 2, "time_ms": 200}
+        with patch("osu_paint_desktop.preview_video_frame", return_value=preview) as reader:
+            self.app.video_preview_button.invoke()
+            self.wait_for(lambda: not self.app.importing)
+        args = reader.call_args.kwargs
+        self.assertEqual(args["frame_index"], 2)
+        self.assertEqual((args["threshold"], args["brightness"], args["contrast"], args["invert"], args["fit"]),
+                         (90, 20, 1.5, True, "cover"))
+        self.assertEqual(self.app.video_preview_result, preview)
+        self.assertEqual(self.app._project_data(), before)
+        self.assertIsNotNone(self.app.import_dialog)
+        self.assertEqual(len(self.app.video_result_canvas.find_all()), 2)
+        self.app.video_fields["threshold"].set("100")
+        self.assertIn("刷新", self.app.video_preview_label.get())
+        with patch("osu_paint_desktop.read_video", return_value=video_result()) as importer:
+            self.app.video_start_button.invoke()
+            self.wait_for(lambda: not self.app.importing)
+        self.assertEqual(importer.call_args.kwargs["threshold"], 100)
+        self.assertEqual(importer.call_args.kwargs["fit"], "cover")
+
+    def test_failed_or_cancelled_preview_preserves_project(self):
+        before = copy.deepcopy(self.app._project_data())
+        self.open_video_dialog()
+        with patch("osu_paint_desktop.preview_video_frame", side_effect=ValueError("帧超出范围")), \
+                patch("osu_paint_desktop.messagebox.showerror"):
+            self.app.video_preview_button.invoke()
+            self.wait_for(lambda: not self.app.importing)
+        self.assertEqual(self.app._project_data(), before)
+        self.assertEqual(str(self.app.video_preview_button["state"]), "normal")
+        def wait_cancel(*args, cancel, **kwargs):
+            cancel.wait(4)
+            raise ImportCancelled("cancelled")
+        with patch("osu_paint_desktop.preview_video_frame", side_effect=wait_cancel):
+            self.app.video_preview_button.invoke()
+            self.app.video_cancel_button.invoke()
+            self.wait_for(lambda: not self.app.importing)
+        self.assertIsNone(self.app.import_dialog)
+        self.assertEqual(self.app._project_data(), before)
+
+    def test_target_client_round_trip_and_old_project_defaults(self):
+        self.app.target_client.set("stable")
+        self.app._refresh_preview()
+        self.assertEqual(self.app.plan["target_client"], "stable")
+        saved = copy.deepcopy(self.app._project_data())
+        self.app.target_client.set("lazer")
+        self.app.load_project(saved)
+        self.app._refresh_preview()
+        self.assertEqual(self.app.plan["target_client"], "stable")
+        del saved["target_client"]
+        self.app.load_project(saved)
+        self.assertEqual(self.app.target_client.get(), "lazer")
+
     def test_bad_options_and_import_failure_preserve_existing_project(self):
         before = copy.deepcopy(self.app._project_data())
         self.open_video_dialog()

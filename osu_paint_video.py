@@ -17,19 +17,71 @@ class ImportCancelled(Exception):
     pass
 
 
-def validate_video_options(*, fps, width, height, start_ms, scroll_speed):
+def validate_video_options(*, fps, width, height, start_ms, scroll_speed, target_client="lazer",
+                           threshold=128, brightness=0, contrast=1, invert=False, fit="stretch"):
     if not math.isfinite(fps) or not 0 < fps <= 60:
         raise ValueError("视频 FPS 须大于 0 且不超过 60，可以填写小数。")
     if not isinstance(width, int) or not 1 <= width <= 10:
         raise ValueError("视频宽度须为 1–10 列；每列对应一个 mania 按键列。")
     if not isinstance(height, int) or not 1 <= height <= 128:
         raise ValueError("视频高度须为 1–128 行。")
-    transition = minimum_transition_ms(scroll_speed)
+    if not math.isfinite(threshold) or not 0 <= threshold <= 255:
+        raise ValueError("黑白阈值须在 0–255 之间。")
+    if not math.isfinite(brightness) or not -255 <= brightness <= 255:
+        raise ValueError("亮度须在 -255–255 之间。")
+    if not math.isfinite(contrast) or not 0 < contrast <= 5:
+        raise ValueError("对比度须大于 0 且不超过 5。")
+    if not isinstance(invert, bool) or fit not in ("stretch", "contain", "cover"):
+        raise ValueError("反转或缩放方式无效。")
+    transition = minimum_transition_ms(scroll_speed, target_client, height)
     if not math.isfinite(start_ms) or start_ms - transition < 100:
         raise ValueError("视频开始时间须为有限数值，并在进场前保留至少 100 ms。")
-    if 1000 / fps <= transition * 3:
+    if target_client == "stable" and math.floor(1000 / fps) < 2 * transition + 2:
+        raise ValueError(f"stable 的 {height} 行画面至少需要 {2 * transition + 2:g} ms / 帧；请降低 FPS 或行数。")
+    if target_client == "lazer" and 1000 / fps <= transition * 3:
         raise ValueError("当前滚速不足以容纳此 FPS 的展示和切帧；请降低 FPS 或提高 lazer 滚速。")
     return transition
+
+
+def _scale_filter(width, height, fit):
+    scale = f"scale={width}:{height}:flags=area"
+    if fit == "contain":
+        scale += f":force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2"
+    elif fit == "cover":
+        scale += f":force_original_aspect_ratio=increase,crop={width}:{height}"
+    return scale + ",format=gray"
+
+
+def _pixel_frame(block, width, *, threshold=128, brightness=0, contrast=1, invert=False):
+    pixels = ["#" if (((value - 128) * contrast + 128 + brightness >= threshold) != invert)
+              else "." for value in block]
+    return ["".join(pixels[row:row + width]) for row in range(0, len(pixels), width)]
+
+
+def preview_video_frame(path, *, frame_index=0, fps=10, width=10, height=24, start_ms=2000,
+                        scroll_speed=27, target_client="lazer", threshold=128, brightness=0,
+                        contrast=1, invert=False, fit="stretch", cancel=None):
+    validate_video_options(fps=fps, width=width, height=height, start_ms=start_ms,
+                           scroll_speed=scroll_speed, target_client=target_client, threshold=threshold,
+                           brightness=brightness, contrast=contrast, invert=invert, fit=fit)
+    if not isinstance(frame_index, int) or not 0 <= frame_index < MAX_VIDEO_FRAMES:
+        raise ValueError(f"预览帧序号须在 1–{MAX_VIDEO_FRAMES} 之间。")
+    with tempfile.TemporaryDirectory(prefix="osu-paint-preview-") as directory:
+        raw, source = Path(directory) / "frame.raw", Path(directory) / "source.ppm"
+        # Select AFTER the same FPS resampling used by full import, including VFR inputs.
+        filters = (f"fps=fps={number(fps)}:start_time=0:round=up,select=eq(n\\,{frame_index}),split=2[src][pixels];"
+                   "[src]scale=320:180:force_original_aspect_ratio=decrease,"
+                   "pad=320:180:(ow-iw)/2:(oh-ih)/2,format=rgb24[source];"
+                   f"[pixels]{_scale_filter(width, height, fit)}[result]")
+        _run_ffmpeg(["-protocol_whitelist", "file,pipe", "-i", str(Path(path).resolve()),
+                     "-filter_complex", filters, "-map", "[source]", "-frames:v", "1", str(source),
+                     "-map", "[result]", "-frames:v", "1", "-f", "rawvideo", str(raw)], cancel)
+        if not raw.exists() or raw.stat().st_size != width * height or not source.exists():
+            raise ValueError("所选帧超出视频范围，请选择更小的帧序号。")
+        return {"frame": _pixel_frame(raw.read_bytes(), width, threshold=threshold, brightness=brightness,
+                                     contrast=contrast, invert=invert),
+                "source_ppm": source.read_bytes(), "frame_index": frame_index,
+                "time_ms": frame_index * 1000 / fps}
 
 
 def _check_cancel(cancel):
@@ -69,9 +121,11 @@ def _run_ffmpeg(arguments, cancel):
 
 
 def import_video(path, *, fps=10, width=10, height=24, start_ms=2000, scroll_speed=27,
-                 progress=None, cancel=None):
+                 progress=None, cancel=None, target_client="lazer", threshold=128, brightness=0,
+                 contrast=1, invert=False, fit="stretch"):
     transition = validate_video_options(fps=fps, width=width, height=height,
-                                        start_ms=start_ms, scroll_speed=scroll_speed)
+                                        start_ms=start_ms, scroll_speed=scroll_speed, target_client=target_client,
+                                        threshold=threshold, brightness=brightness, contrast=contrast, invert=invert, fit=fit)
     path = Path(path).expanduser().resolve()
     if not path.is_file():
         raise ValueError("请选择存在的本地视频文件。")
@@ -90,7 +144,7 @@ def import_video(path, *, fps=10, width=10, height=24, start_ms=2000, scroll_spe
         report("正在按指定 FPS 缩放和抽帧…（可取消）")
         # Timestamp-based resampling handles variable-rate video without cumulative drift.
         # A tiny grayscale raw file bounds memory and lets cancellation reap FFmpeg reliably.
-        filters = f"fps=fps={number(fps)}:start_time=0:round=up,scale={width}:{height}:flags=area,format=gray"
+        filters = f"fps=fps={number(fps)}:start_time=0:round=up," + _scale_filter(width, height, fit)
         log = _run_ffmpeg(["-protocol_whitelist", "file,pipe", "-i", str(path), "-map", "0:v:0",
                            "-vf", filters, "-frames:v", str(limit + 1), "-an", "-f", "rawvideo", str(raw)], cancel)
         pixels = raw.read_bytes()
@@ -104,15 +158,16 @@ def import_video(path, *, fps=10, width=10, height=24, start_ms=2000, scroll_spe
             if index % 250 == 0:
                 report(f"正在生成音符画面：{index + 1} / {count} 帧…")
             block = pixels[index * frame_size:(index + 1) * frame_size]
-            frames.append(["".join("#" if value >= 128 else "." for value in block[row:row + width])
-                           for row in range(0, frame_size, width)])
+            frames.append(_pixel_frame(block, width, threshold=threshold, brightness=brightness,
+                                       contrast=contrast, invert=invert))
         period = 1000 / fps
         windows = [(start_ms + i * period,
                     start_ms + (i + 1) * period - (transition if i < count - 1 else 0))
                    for i in range(count)]
         report("正在编译谱面与视频时间轴…")
         plan = compile_frames(frames, scroll_speed=scroll_speed, frame_times=windows,
-                              fast_clear=True, allow_empty_frames=True, anchor_reference=True)
+                              fast_clear=True, allow_empty_frames=True, anchor_reference=True,
+                              target_client=target_client)
         audio_data = None
         if re.search(r"^\s*Stream #0:\d+.*Audio:", log, re.MULTILINE):
             report("正在提取音乐并对齐视频开始时间…（可取消）")
@@ -127,6 +182,7 @@ def import_video(path, *, fps=10, width=10, height=24, start_ms=2000, scroll_spe
             audio_data = audio.read_bytes()
         _check_cancel(cancel)
     video = {"filename": path.name, "fps": fps, "width": width, "height": height,
-             "start_ms": start_ms, "duration_ms": count * period}
+             "start_ms": start_ms, "duration_ms": count * period,
+             "threshold": threshold, "brightness": brightness, "contrast": contrast, "invert": invert, "fit": fit}
     plan["video"] = video.copy()
     return {"plan": plan, "audio": audio_data, "video": video}

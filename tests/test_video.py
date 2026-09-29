@@ -17,7 +17,7 @@ except ImportError:
     imageio_ffmpeg = None
 
 from osu_paint import write_output
-from osu_paint_video import ImportCancelled, _run_ffmpeg, import_video, validate_video_options
+from osu_paint_video import ImportCancelled, _run_ffmpeg, import_video, preview_video_frame, validate_video_options
 
 
 class VideoValidationTests(unittest.TestCase):
@@ -26,7 +26,10 @@ class VideoValidationTests(unittest.TestCase):
         for field, value in (("fps", 0), ("fps", -1), ("fps", math.nan), ("fps", math.inf),
                              ("fps", 61), ("width", 0), ("width", 11), ("width", 2.5),
                              ("height", 0), ("height", 129), ("height", 1.5),
-                             ("start_ms", 0), ("start_ms", math.inf), ("scroll_speed", 0)):
+                             ("start_ms", 0), ("start_ms", math.inf), ("scroll_speed", 0),
+                             ("threshold", -1), ("threshold", 256), ("brightness", math.nan),
+                             ("brightness", 256), ("contrast", 0), ("contrast", math.inf),
+                             ("invert", "true"), ("fit", "invalid"), ("target_client", "unknown")):
             with self.subTest(field=field, value=value), self.assertRaises(ValueError):
                 validate_video_options(**dict(defaults, **{field: value}))
         with self.assertRaises(ValueError):
@@ -178,6 +181,48 @@ class VideoImportTests(unittest.TestCase):
             self.load(self.directory / "missing.mp4")
         with patch("osu_paint_video.MAX_VIDEO_FRAMES", 2), self.assertRaisesRegex(ValueError, "帧|上限"):
             self.load()
+
+    def test_preview_matches_import_for_selected_vfr_frames_and_filters(self):
+        for fit in ("stretch", "contain", "cover"):
+            options = dict(fps=4, width=3, height=5, threshold=100, brightness=15,
+                           contrast=1.5, invert=True, fit=fit)
+            imported = self.load(self.variable, **options)
+            for index in (0, 2, 4):
+                preview = preview_video_frame(self.variable, frame_index=index, **options)
+                self.assertEqual(preview["frame"], imported["plan"]["frames"][index]["pattern"])
+                self.assertTrue(preview["source_ppm"].startswith(b"P6"))
+                self.assertEqual(preview["time_ms"], index * 250)
+
+    def test_adjustments_recover_dim_shapes_and_invert_background(self):
+        source = self.directory / "dim.mkv"
+        pixels = bytes([80] * 8 + [120] * 8) * 16
+        self.ffmpeg(["-f", "rawvideo", "-pix_fmt", "gray", "-s", "16x16", "-r", "1", "-i", "pipe:0",
+                     "-c:v", "ffv1", str(source)], input=pixels)
+        default = preview_video_frame(source, fps=1, width=2, height=2)
+        self.assertEqual(default["frame"], ["..", ".."])
+        for changes in (dict(threshold=100), dict(brightness=30), dict(brightness=50, contrast=2)):
+            adjusted = preview_video_frame(source, fps=1, width=2, height=2, **changes)
+            self.assertEqual(adjusted["frame"], [".#", ".#"])
+            self.assertEqual(self.load(source, fps=1, **changes)["plan"]["pattern"], adjusted["frame"])
+        inverse = preview_video_frame(source, fps=1, width=2, height=2, threshold=100, invert=True)
+        self.assertEqual(inverse["frame"], ["#.", "#."])
+
+    def test_preview_range_validation_and_cancellation(self):
+        for index in (-1, 100, 20000):
+            with self.assertRaises(ValueError):
+                preview_video_frame(self.source, frame_index=index, fps=4)
+        cancel = threading.Event()
+        cancel.set()
+        with self.assertRaises(ImportCancelled):
+            preview_video_frame(self.source, cancel=cancel)
+
+    def test_stable_video_keeps_audio_and_uses_integer_note_times(self):
+        result = self.load(target_client="stable", height=24, fps=10)
+        self.assertIsNotNone(result["audio"])
+        self.assertEqual(result["plan"]["target_client"], "stable")
+        self.assertTrue(all(n["time_ms"] == int(n["time_ms"]) for n in result["plan"]["notes"]))
+        with self.assertRaisesRegex(ValueError, "stable"):
+            self.load(target_client="stable", height=24, fps=30)
 
 
 if __name__ == "__main__":

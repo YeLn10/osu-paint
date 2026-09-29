@@ -83,17 +83,21 @@ def compile_pattern(rows, start_ms, end_ms, scroll_speed=27, transition_ms=12):
     return compile_frames([rows], start_ms, end_ms, scroll_speed, transition_ms)
 
 
-def minimum_transition_ms(scroll_speed):
+def minimum_transition_ms(scroll_speed, target_client="lazer", height=1):
+    if target_client not in ("lazer", "stable"):
+        raise ValueError("目标客户端须为 lazer 或 stable。")
     if not math.isfinite(scroll_speed) or not 1 <= scroll_speed <= 40:
         raise ValueError("lazer 滚速须在 1–40 之间。")
-    time_range = 11485 / scroll_speed * (658 / 643.2)
+    time_range = 11485 / scroll_speed * (658 / 643.2 if target_client == "lazer" else 1)
     # Maximum legal speed is 500 / 6 * 10. Round UP to avoid exceeding it.
-    return math.ceil(1.1 * time_range / (500 / 6 * 10) * 1000) / 1000
+    minimum = math.ceil(1.1 * time_range / (500 / 6 * 10) * 1000) / 1000
+    # Integer-millisecond notes need distinct row timestamps during the sweep.
+    return max(math.ceil(minimum), 2 * height) if target_client == "stable" else minimum
 
 
 def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transition_ms=12,
                    *, frame_times=None, fast_clear=False, allow_empty_frames=False,
-                   anchor_reference=False):
+                   anchor_reference=False, target_client="lazer"):
     if not frames:
         raise ValueError("至少需要一帧图案。")
     frames = parse_frames("\n---\n".join("\n".join(rows) for rows in frames),
@@ -103,12 +107,17 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
     if not 1 <= scroll_speed <= 40:
         raise ValueError("lazer 滚速须在 1–40 之间。")
     # Native lazer skin: 768 - 110 = 658; legacy baseline: 402 * 1.6 = 643.2.
-    time_range = 11485 / scroll_speed * (658 / 643.2)
+    minimum = minimum_transition_ms(scroll_speed, target_client, len(frames[0]))
+    time_range = 11485 / scroll_speed * (658 / 643.2 if target_client == "lazer" else 1)
     requested_transition = transition_ms
     if transition_ms <= 0:
         raise ValueError("切帧时长必须大于 0。")
     if fast_clear:
-        transition_ms = minimum_transition_ms(scroll_speed)
+        transition_ms = minimum
+    if target_client == "stable":
+        transition_ms = math.ceil(transition_ms)
+        if transition_ms < minimum:
+            raise ValueError(f"stable 的 {len(frames[0])} 行画面至少需要 {minimum:g} ms 切帧，以保留整数毫秒行间距。")
     # A transition moves 1.1 complete playfield heights, including edge margins.
     fast_multiplier = 1.1 * time_range / transition_ms
     fast_beat = 500 * 10 / fast_multiplier
@@ -130,6 +139,11 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
     for i, window in enumerate(frame_times):
         if len(window) != 2 or not all(math.isfinite(v) for v in window) or window[1] <= window[0]:
             raise ValueError(f"第 {i + 1} 帧需要有限的开始、结束时间，且结束 > 开始。")
+    if target_client == "stable":
+        frame_times = [(round(start), round(end)) for start, end in frame_times]
+        if any(end - start < transition_ms + 2 for start, end in frame_times):
+            raise ValueError(f"stable 每帧展示至少需要 {transition_ms + 2:g} ms；请降低 FPS、行数或延长展示。")
+    for i, window in enumerate(frame_times):
         if i and window[0] - frame_times[i - 1][1] < transition_ms - 1e-7:
             raise ValueError(f"第 {i}、{i + 1} 帧重叠或间隔不足；至少需要 {transition_ms:.3f} ms 切帧。")
     start_ms, end_ms = frame_times[0][0], frame_times[-1][1]
@@ -137,6 +151,8 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
         raise ValueError("进场前至少保留 100 ms；请推迟第一帧开始时间。")
     anchors = [min(transition_ms * 2, (end - start) / 2) if anchor_reference else 0
                for start, end in frame_times]
+    if target_client == "stable":
+        anchors = [transition_ms + 1] * len(frame_times)
     counts = [math.ceil((end - start - anchor) / 50)
               for (start, end), anchor in zip(frame_times, anchors)]
     if 60000 - (sum(counts) - 1) * 0.01 < 6:
@@ -188,6 +204,8 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
             y = 0.2 + (row + 0.5) * 0.6 / len(rows)
             distance = timeline.position(frame["start_ms"]) + (1 - y) * time_range
             time = timeline.time_at(distance)
+            if target_client == "stable":
+                time = round(time)
             for column, pixel in enumerate(line):
                 if pixel == "#":
                     notes.append({"frame": index, "column": column, "row": row, "time_ms": time, "y": y})
@@ -204,9 +222,10 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
         "start_ms": start_ms, "end_ms": end_ms,
         "transition_ms": transition_ms, "scroll_speed": scroll_speed,
         "requested_transition_ms": requested_transition, "fast_clear": fast_clear,
-        "timing_mode": timing_mode,
+        "timing_mode": timing_mode, "target_client": target_client,
         "time_range_ms": time_range, "base_beat_length_ms": base,
-        "skin_assumption": "lazer default skin, downscroll, no speed/column mods",
+        "skin_assumption": ("lazer default skin, downscroll, no speed/column mods" if target_client == "lazer" else
+                            "stable legacy baseline, fixed scroll speed, downscroll, no speed/column mods; experimental"),
         "drift_playfield_fraction": drift, "drift_at_658px": drift * 658,
         "points": [p.__dict__ for p in points], "notes": notes,
     }
@@ -222,7 +241,7 @@ def encode_osu(plan, audio_filename="silence.wav"):
         "AudioLeadIn: 0", f"PreviewTime: {int(plan['start_ms'])}", "Countdown: 0",
         "SampleSet: Soft", "Mode: 3", "", "[Metadata]", "Title: SV Pattern",
         "Artist: osu-paint", "Creator: osu-paint",
-        f"Version: {plan['keys']}K - Scroll speed {number(plan['scroll_speed'])} - Use NF",
+        f"Version: {plan.get('target_client', 'lazer')} {plan['keys']}K - Scroll speed {number(plan['scroll_speed'])} - Use NF",
         "Tags: sv animation prototype", "BeatmapID: 0", "BeatmapSetID: -1", "",
         "[Difficulty]", "HPDrainRate: 0", f"CircleSize: {plan['keys']}",
         "OverallDifficulty: 5", "ApproachRate: 5", "SliderMultiplier: 1",
@@ -306,6 +325,12 @@ def main():
     parser.add_argument("--fps", type=float, default=10, help="视频每秒帧数，可填小数，默认 10")
     parser.add_argument("--width", type=int, default=10, help="视频画面宽度 / 按键列，1–10，默认 10")
     parser.add_argument("--height", type=int, default=24, help="视频画面高度 / 行，1–128，默认 24")
+    parser.add_argument("--target-client", choices=("lazer", "stable"), default="lazer", help="stable 为实验整数时间兼容")
+    parser.add_argument("--threshold", type=float, default=128, help="视频黑白阈值，0–255")
+    parser.add_argument("--brightness", type=float, default=0, help="视频亮度偏移，-255–255")
+    parser.add_argument("--contrast", type=float, default=1, help="视频对比度，>0–5")
+    parser.add_argument("--invert", action="store_true", help="暗部生成音符")
+    parser.add_argument("--fit", choices=("stretch", "contain", "cover"), default="stretch", help="拉伸、等比留边、等比裁剪")
     parser.add_argument("--start-ms", type=float, required=True, help="完整展示开始时间（ms）")
     parser.add_argument("--end-ms", type=float, help="文本图案必填；视频结束时间由 FPS 与实际帧数确定")
     parser.add_argument("--scroll-speed", type=float, default=27, help="须与 lazer 设置相同，默认 27")
@@ -319,7 +344,9 @@ def main():
                 raise ValueError("视频结束时间自动计算，请不要传 --end-ms。")
             from osu_paint_video import import_video
             result = import_video(args.pattern, fps=args.fps, width=args.width, height=args.height,
-                                  start_ms=args.start_ms, scroll_speed=args.scroll_speed)
+                                  start_ms=args.start_ms, scroll_speed=args.scroll_speed, target_client=args.target_client,
+                                  threshold=args.threshold, brightness=args.brightness, contrast=args.contrast,
+                                  invert=args.invert, fit=args.fit)
             plan = result["plan"]
             write_output(plan, args.output, audio_data=result["audio"])
         else:
@@ -327,7 +354,7 @@ def main():
                 raise ValueError("文本图案需要 --end-ms。")
             frames = parse_frames(args.pattern.read_text(encoding="utf-8-sig"))
             plan = compile_frames(frames, args.start_ms, args.end_ms, args.scroll_speed, args.transition_ms,
-                                  fast_clear=args.fast_clear)
+                                  fast_clear=args.fast_clear, target_client=args.target_client)
             write_output(plan, args.output)
     except (ValueError, OSError) as error:
         parser.error(str(error))

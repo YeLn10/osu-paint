@@ -49,6 +49,26 @@ def position(points, time, time_range):
 
 
 class ExportTests(unittest.TestCase):
+    def test_stable_rows_remain_distinct_on_integer_millisecond_grid(self):
+        for height in (1, 6, 24, 128):
+            plan = compile_frames([["#"] * height], 2000, 4000, fast_clear=True, target_client="stable")
+            text = encode_osu(plan)
+            points, notes = decode(text)
+            self.assertEqual(len({t for _, t in notes}), height)
+            self.assertTrue(all(t == int(t) for _, t in notes))
+            self.assertTrue(all(p["time"] == int(p["time"]) for p in plan["points"]))
+            for note in plan["notes"]:
+                y = 1 - position(points, note["time_ms"], plan["time_range_ms"]) + position(points, 2000, plan["time_range_ms"])
+                self.assertAlmostEqual(y, note["y"], delta=0.3 / height)
+            self.assertIn("Version: stable", text)
+
+    def test_stable_long_video_preserves_reference_bpm(self):
+        windows = [(2000 + i * 100, 2052 + i * 100) for i in range(1000)]
+        plan = compile_frames([["#"] * 24] * 1000, frame_times=windows,
+                              fast_clear=True, target_client="stable")
+        self.assertEqual(plan["base_beat_length_ms"], 500)
+        self.assertEqual(plan["transition_ms"], 48)
+
     def test_fast_clear_removes_notes_from_full_stage_within_one_ms(self):
         plan = compile_frames([["#"]], 2000, 4000, fast_clear=True)
         points, notes = decode(encode_osu(plan))

@@ -13,7 +13,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from osu_paint import Point, Timeline, compile_frames, number, parse_frames, write_output
-from osu_paint_video import ImportCancelled, import_video as read_video, validate_video_options
+from osu_paint_video import ImportCancelled, import_video as read_video, preview_video_frame, validate_video_options
 from osu_paint_audio import AudioPreview
 
 
@@ -148,6 +148,10 @@ class PaintApp:
         ttk.Checkbutton(timing_bar, text="极速清场", variable=self.fast_clear,
                         command=self._timing_options_changed).pack(side="left", padx=8)
         ttk.Button(timing_bar, text="参数说明", command=self.explain_timing).pack(side="right")
+        self.target_client = tk.StringVar(value="lazer")
+        ttk.Combobox(timing_bar, textvariable=self.target_client, values=("lazer", "stable"),
+                     state="readonly", width=7).pack(side="left")
+        self.target_client.trace_add("write", lambda *args: self._parameter_changed("target_client"))
         settings = ttk.Frame(left)
         settings.grid(row=7, column=0, sticky="ew")
         self.fields = {}
@@ -155,7 +159,7 @@ class PaintApp:
         self.entries = {}
         for i, (key, label, value) in enumerate([
                 ("start_ms", "展示开始 / ms", "2000"), ("end_ms", "展示结束 / ms", "4000"),
-                ("transition_ms", "切帧时长 / ms", "12"), ("scroll_speed", "lazer 滚速 / 1–40", "27")]):
+                ("transition_ms", "切帧时长 / ms", "12"), ("scroll_speed", "游戏滚速 / 1–40", "27")]):
             settings.columnconfigure(i, weight=1, uniform="fields")
             field_label = ttk.Label(settings, text=label, style="Muted.TLabel")
             field_label.grid(row=0, column=i, sticky="w", padx=(0, 8))
@@ -174,7 +178,7 @@ class PaintApp:
         right.columnconfigure(0, weight=1)
         right.rowconfigure(2, weight=1)
         ttk.Label(right, text="舞台预览", style="Heading.TLabel").grid(row=0, column=0, sticky="w", pady=(8, 6))
-        ttk.Label(right, text="位置模拟 · 非 lazer 实机画面", style="Muted.TLabel").grid(row=1, column=0, sticky="w", pady=(0, 8))
+        ttk.Label(right, text="位置模拟 · 非游戏实机画面", style="Muted.TLabel").grid(row=1, column=0, sticky="w", pady=(0, 8))
         self.preview = tk.Canvas(right, background="#0b101b", highlightthickness=0, width=300, height=360)
         self.preview.grid(row=2, column=0, sticky="nsew")
         self.preview.bind("<Configure>", lambda event: self._draw_preview())
@@ -188,7 +192,7 @@ class PaintApp:
         ttk.Button(playback, text="回到当前帧", command=self.seek_selected).pack(side="left", padx=8)
         self.time_label = tk.StringVar()
         ttk.Label(right, textvariable=self.time_label, style="Muted.TLabel").grid(row=5, column=0, sticky="w", pady=(8, 4))
-        ttk.Label(right, text="展示为近似停帧。请使用 lazer 默认皮肤、向下滚动，\n同步上方滚速并开启 No Fail；不要启用恒速或变速 MOD。",
+        ttk.Label(right, text="近似停帧 · 向下滚动 · 同步游戏滚速 · 开启 No Fail。\nstable 为实验兼容，关闭随 BPM 缩放；高行数需降低 FPS。",
                   style="Muted.TLabel", font=("Microsoft YaHei UI", 9)).grid(row=6, column=0, sticky="w", pady=(6, 0))
 
         footer = ttk.Frame(self.root, padding=(24, 18, 24, 16))
@@ -231,7 +235,7 @@ class PaintApp:
             try:
                 plan = compile_frames(self.frames, *map(float, self.uniform_times),
                                       float(self.fields["scroll_speed"].get()), float(self.fields["transition_ms"].get()),
-                                      fast_clear=self.fast_clear.get())
+                                      fast_clear=self.fast_clear.get(), target_client=self.target_client.get())
             except ValueError:
                 pass
             else:
@@ -250,7 +254,9 @@ class PaintApp:
                             "自由模式：选中一帧，填写本帧开始、结束时间。允许留空档，不能重叠；间隔须足够切帧。\n\n"
                             "切帧时长：推进图案所需的时间。越短移动越快，越长越容易看到下落。远离的两帧分别退场、进场。\n"
                             "极速清场：自动用合法最高速度计算时长，覆盖手动切帧值；滚速 27 时约 0.575 ms。不能保证零过渡画面。\n\n"
-                            "lazer 滚速：必须与游戏设置一致。它决定时间距离如何换算成舞台位置，不是动画帧率；"
+                            "stable：整数毫秒音符，最短切帧至少为行数 × 2 ms；展示还需切帧时长 + 2 ms。\n"
+                            "采用传统皮肤默认判定线模型，需关闭随 BPM 缩放；尚未实机验收。\n\n"
+                            "游戏滚速：必须与游戏设置一致。它决定时间距离如何换算成舞台位置，不是动画帧率；"
                             "更改后会重新计算音符与变速点，不会改变你填写的展示时间。\n\n"
                             "保存为 JSON 项目可保留全部时间与参数；TXT 仅保存图案。",
                             parent=self.root)
@@ -399,7 +405,7 @@ class PaintApp:
         settings["start_ms"], settings["end_ms"] = self.uniform_times
         data = {"format": "osu-paint", "version": 1, "frames": self.frames,
                 "frame_times": self.frame_times, "timing_mode": self.timing_mode.get(),
-                "settings": settings, "fast_clear": self.fast_clear.get()}
+                "settings": settings, "fast_clear": self.fast_clear.get(), "target_client": self.target_client.get()}
         if self.video is not None:
             data.update(version=2, video=self.video.copy(),
                         audio=base64.b64encode(self.audio_data).decode("ascii") if self.audio_data is not None else None)
@@ -410,12 +416,16 @@ class PaintApp:
             if data["format"] != "osu-paint" or data["version"] not in (1, 2):
                 raise ValueError("不支持的项目版本。")
             video, audio = None, None
+            target_client = data.get("target_client", "lazer")
+            if target_client not in ("lazer", "stable"):
+                raise ValueError("项目中的目标客户端无效。")
             if data["version"] == 2:
                 video = data["video"]
                 if not isinstance(video, dict) or not isinstance(video["filename"], str):
                     raise ValueError("项目中的视频信息无效。")
                 validate_video_options(fps=video["fps"], width=video["width"], height=video["height"],
-                                       start_ms=video["start_ms"], scroll_speed=float(data["settings"]["scroll_speed"]))
+                                       start_ms=video["start_ms"], scroll_speed=float(data["settings"]["scroll_speed"]),
+                                       target_client=target_client)
                 if not math.isfinite(video["duration_ms"]) or video["duration_ms"] <= 0:
                     raise ValueError("项目中的视频时长无效。")
                 if data["audio"] is not None:
@@ -442,6 +452,7 @@ class PaintApp:
         self.uniform_times = [settings["start_ms"], settings["end_ms"]]
         self.free_times_initialized = True
         self.syncing_fields = True
+        self.target_client.set(target_client)
         self.timing_mode.set(mode)
         self.fast_clear.set(data["fast_clear"])
         for key, value in settings.items():
@@ -508,7 +519,17 @@ class PaintApp:
         dialog.transient(self.root)
         dialog.grab_set()
         panel = ttk.Frame(dialog, padding=20)
-        panel.pack(fill="both", expand=True)
+        panel.pack(side="left", fill="both", expand=True)
+        preview_panel = ttk.Frame(dialog, padding=(0, 20, 20, 20))
+        preview_panel.pack(side="right", fill="both")
+        ttk.Label(preview_panel, text="所选帧原画面", style="Heading.TLabel").pack(anchor="w")
+        self.video_source_canvas = tk.Canvas(preview_panel, width=320, height=180, background="#000", highlightthickness=0)
+        self.video_source_canvas.pack(pady=(8, 12))
+        self.video_preview_label = tk.StringVar(value="填写帧序号后点击预览；参数修改后需刷新。")
+        ttk.Label(preview_panel, textvariable=self.video_preview_label, wraplength=320, style="Muted.TLabel").pack(anchor="w")
+        self.video_result_canvas = tk.Canvas(preview_panel, width=320, height=180, background="#000", highlightthickness=0)
+        self.video_result_canvas.pack(pady=8)
+        self.video_preview_result = None
         ttk.Label(panel, text=Path(filename).name, style="Heading.TLabel", wraplength=480).grid(
             row=0, column=0, columnspan=2, sticky="w", pady=(0, 14))
         self.video_fields = {}
@@ -517,21 +538,41 @@ class PaintApp:
                 ("fps", "每秒帧数 / FPS（可填小数，≤60）", "10"),
                 ("width", "画面宽度 / 按键列（1–10）", "10"),
                 ("height", "画面高度 / 行（1–128）", "24"),
-                ("start_ms", "视频与音乐开始 / ms", self.uniform_times[0])], 1):
+                ("start_ms", "视频与音乐开始 / ms", self.uniform_times[0]),
+                ("threshold", "黑白阈值 / 0–255", "128"),
+                ("brightness", "亮度 / -255–255", "0"),
+                ("contrast", "对比度 / >0–5", "1")], 1):
             ttk.Label(panel, text=label, style="Muted.TLabel").grid(row=row, column=0, sticky="w", padx=(0, 16), pady=5)
             variable = self.video_fields[key] = tk.StringVar(value=value)
             entry = ttk.Entry(panel, textvariable=variable, width=12)
             entry.grid(row=row, column=1, sticky="ew", pady=5)
             inputs.append(entry)
-        ttk.Label(panel, text="亮部转为音符，暗部留空；画面缩放到所填列数 × 行数。\n"
-                  "自动启用极速清场和逐帧时间，音乐同时导入，无音轨则使用静音。\n"
-                  "较高 FPS / 分辨率会产生更多音符；桌面预览会同步播放音乐。",
-                  style="Muted.TLabel", wraplength=480).grid(row=5, column=0, columnspan=2, sticky="w", pady=(12, 8))
+        self.video_invert = tk.BooleanVar(value=False)
+        invert = ttk.Checkbutton(panel, text="亮暗反转（暗部生成音符）", variable=self.video_invert)
+        invert.grid(row=8, column=0, columnspan=2, sticky="w", pady=5)
+        inputs.append(invert)
+        self.video_fit = tk.StringVar(value="拉伸")
+        self.video_target = tk.StringVar(value=self.target_client.get())
+        for row, label, variable, choices in [(9, "缩放方式", self.video_fit, ("拉伸", "等比留边", "等比裁剪")),
+                                               (10, "目标客户端", self.video_target, ("lazer", "stable"))]:
+            ttk.Label(panel, text=label, style="Muted.TLabel").grid(row=row, column=0, sticky="w")
+            combo = ttk.Combobox(panel, textvariable=variable, values=choices, state="readonly", width=12)
+            combo.grid(row=row, column=1, pady=5)
+            inputs.append(combo)
+        ttk.Label(panel, text="亮度／对比度调整后按阈值转换。stable 需要更长切帧。\n预览帧序号按所填 FPS 采样，从 1 开始；不会改变导入范围。",
+                  style="Muted.TLabel", wraplength=400).grid(row=11, column=0, columnspan=2, sticky="w", pady=(12, 8))
+        self.video_frame_index = tk.StringVar(value="1")
+        ttk.Label(panel, text="预览帧序号 / 从 1 开始", style="Muted.TLabel").grid(row=12, column=0, sticky="w")
+        frame_entry = ttk.Entry(panel, textvariable=self.video_frame_index, width=12)
+        frame_entry.grid(row=12, column=1)
+        inputs.append(frame_entry)
+        for variable in [*self.video_fields.values(), self.video_invert, self.video_fit, self.video_frame_index, self.video_target]:
+            variable.trace_add("write", lambda *args: self.video_preview_label.set("参数或帧已修改，请点击预览刷新。"))
         self.import_status = tk.StringVar(value="导入会替换当前画布；失败或取消时保留原项目。")
         ttk.Label(panel, textvariable=self.import_status, wraplength=480, style="Muted.TLabel").grid(
-            row=6, column=0, columnspan=2, sticky="w", pady=8)
+            row=13, column=0, columnspan=2, sticky="w", pady=8)
         buttons = ttk.Frame(panel)
-        buttons.grid(row=7, column=0, columnspan=2, sticky="e", pady=(8, 0))
+        buttons.grid(row=14, column=0, columnspan=2, sticky="e", pady=(8, 0))
 
         def cancel():
             if self.importing:
@@ -542,29 +583,38 @@ class PaintApp:
                 dialog.destroy()
                 self.import_dialog = None
 
-        def start():
+        def start(preview=False):
             if self.importing:
                 return
             try:
                 options = {key: (int(variable.get()) if key in ("width", "height") else float(variable.get()))
                            for key, variable in self.video_fields.items()}
                 options["scroll_speed"] = float(self.fields["scroll_speed"].get())
+                options.update(invert=self.video_invert.get(),
+                               fit={"拉伸": "stretch", "等比留边": "contain", "等比裁剪": "cover"}[self.video_fit.get()],
+                               target_client=self.video_target.get())
                 validate_video_options(**options)
+                frame_index = int(self.video_frame_index.get()) - 1 if preview else None
             except ValueError as error:
                 messagebox.showerror("视频参数无效", str(error), parent=dialog)
                 return
             self._stop()
             self.importing = True
+            self.import_job = "preview" if preview else "import"
             self.import_cancel.clear()
             for entry in inputs:
                 entry.configure(state="disabled")
             self.video_start_button.configure(state="disabled")
+            self.video_preview_button.configure(state="disabled")
             self.import_status.set("正在准备视频处理…")
 
             def run():
                 try:
-                    result = read_video(filename, **options, cancel=self.import_cancel,
-                                        progress=lambda message: self.import_results.put(("progress", message)))
+                    if preview:
+                        result = preview_video_frame(filename, frame_index=frame_index, **options, cancel=self.import_cancel)
+                    else:
+                        result = read_video(filename, **options, cancel=self.import_cancel,
+                                            progress=lambda message: self.import_results.put(("progress", message)))
                 except Exception as error:
                     self.import_results.put(("finished", (None, error)))
                 else:
@@ -576,6 +626,8 @@ class PaintApp:
         self.video_cancel_button.pack(side="left", padx=8)
         self.video_start_button = ttk.Button(buttons, text="导入视频和音乐", command=start, style="Accent.TButton")
         self.video_start_button.pack(side="left")
+        self.video_preview_button = ttk.Button(preview_panel, text="预览所选帧", command=lambda: start(preview=True))
+        self.video_preview_button.pack(anchor="e", pady=8)
         self.video_inputs = inputs
         dialog.protocol("WM_DELETE_WINDOW", cancel)
 
@@ -588,6 +640,7 @@ class PaintApp:
         self.selected = 0
         self.free_times_initialized = True
         self.syncing_fields = True
+        self.target_client.set(plan.get("target_client", "lazer"))
         self.timing_mode.set("自由模式")
         self.fast_clear.set(True)
         self.fields["scroll_speed"].set(number(plan["scroll_speed"]))
@@ -609,10 +662,30 @@ class PaintApp:
             result, error = payload
             if error is None and self.import_cancel.is_set():
                 error = ImportCancelled("已取消视频导入，原项目未改变。")
+            if error is None and self.import_job == "preview":
+                self.video_preview_result = result
+                self.video_source_image = tk.PhotoImage(data=result["source_ppm"], format="PPM")
+                self.video_source_canvas.delete("all")
+                self.video_source_canvas.create_image(0, 0, image=self.video_source_image, anchor="nw")
+                self.video_result_canvas.delete("all")
+                rows = result["frame"]
+                for y, row in enumerate(rows):
+                    for x, pixel in enumerate(row):
+                        if pixel == "#":
+                            self.video_result_canvas.create_rectangle(x * 320 / len(row), y * 180 / len(rows),
+                                (x + 1) * 320 / len(row), (y + 1) * 180 / len(rows), fill=INK, outline="")
+                self.video_preview_label.set(f"第 {result['frame_index'] + 1} 帧 · 源时间 {result['time_ms']:.2f} ms · 转换结果")
+                self.import_status.set("预览完成。可调整参数、选择其他帧，或导入整个视频。")
+                for entry in self.video_inputs:
+                    entry.configure(state="readonly" if isinstance(entry, ttk.Combobox) else "normal")
+                self.video_start_button.configure(state="normal")
+                self.video_preview_button.configure(state="normal")
+                continue
             if error is not None and not isinstance(error, ImportCancelled):
                 for entry in self.video_inputs:
-                    entry.configure(state="normal")
+                    entry.configure(state="readonly" if isinstance(entry, ttk.Combobox) else "normal")
                 self.video_start_button.configure(state="normal")
+                self.video_preview_button.configure(state="normal")
                 self.video_cancel_button.configure(state="normal")
                 self.import_status.set("导入失败，原项目未改变。请检查文件或参数后重试。")
                 messagebox.showerror("视频导入失败", str(error), parent=self.import_dialog)
@@ -693,7 +766,8 @@ class PaintApp:
                     except ValueError:
                         raise ValueError("每一帧的开始和结束时间都必须填写数字。") from None
                 self.plan = compile_frames(self.frames, **values, frame_times=windows, fast_clear=self.fast_clear.get(),
-                                            allow_empty_frames=self.video is not None, anchor_reference=self.video is not None)
+                                            allow_empty_frames=self.video is not None, anchor_reference=self.video is not None,
+                                            target_client=self.target_client.get())
             if self.video is not None:
                 self.plan["video"] = self.video.copy()
         except ValueError as error:
