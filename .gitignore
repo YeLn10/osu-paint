@@ -1,0 +1,13 @@
+__pycache__/
+output/
+.build-env/
+build/
+dist/
+
+# Local environments, credentials, and generated beatmaps
+.venv/
+.env
+.env.*
+*.pem
+*.key
+*.osz
