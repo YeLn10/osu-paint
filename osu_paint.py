@@ -38,18 +38,18 @@ class Timeline:
         return self.times[i] + (distance - self.distances[i]) / self.speeds[i]
 
 
-def parse_pattern(text):
+def parse_pattern(text, *, allow_empty=False):
     rows = text.strip().splitlines()
     if not rows or not 1 <= len(rows[0]) <= 10:
         raise ValueError("图案宽度须为 1–10 列（初版使用单舞台）。")
     if any(len(row) != len(rows[0]) or set(row) - {"#", "."} for row in rows):
         raise ValueError("图案每行必须等宽，只能使用 # 和 .。")
-    if not any("#" in row for row in rows):
+    if not allow_empty and not any("#" in row for row in rows):
         raise ValueError("图案至少需要一个 #。")
     return rows
 
 
-def parse_frames(text):
+def parse_frames(text, *, allow_empty=False):
     """Separate equally sized text frames with a line containing --- ."""
     blocks = [[]]
     for line in text.strip().splitlines():
@@ -57,7 +57,7 @@ def parse_frames(text):
             blocks.append([])
         else:
             blocks[-1].append(line)
-    frames = [parse_pattern("\n".join(block)) for block in blocks]
+    frames = [parse_pattern("\n".join(block), allow_empty=allow_empty) for block in blocks]
     if any((len(frame), len(frame[0])) != (len(frames[0]), len(frames[0][0]))
            for frame in frames):
         raise ValueError("动画的所有帧必须具有相同的行数和列数。")
@@ -83,11 +83,21 @@ def compile_pattern(rows, start_ms, end_ms, scroll_speed=27, transition_ms=12):
     return compile_frames([rows], start_ms, end_ms, scroll_speed, transition_ms)
 
 
+def minimum_transition_ms(scroll_speed):
+    if not math.isfinite(scroll_speed) or not 1 <= scroll_speed <= 40:
+        raise ValueError("lazer 滚速须在 1–40 之间。")
+    time_range = 11485 / scroll_speed * (658 / 643.2)
+    # Maximum legal speed is 500 / 6 * 10. Round UP to avoid exceeding it.
+    return math.ceil(1.1 * time_range / (500 / 6 * 10) * 1000) / 1000
+
+
 def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transition_ms=12,
-                   *, frame_times=None, fast_clear=False):
+                   *, frame_times=None, fast_clear=False, allow_empty_frames=False,
+                   anchor_reference=False):
     if not frames:
         raise ValueError("至少需要一帧图案。")
-    frames = parse_frames("\n---\n".join("\n".join(rows) for rows in frames))
+    frames = parse_frames("\n---\n".join("\n".join(rows) for rows in frames),
+                          allow_empty=allow_empty_frames)
     if not all(math.isfinite(v) for v in (scroll_speed, transition_ms)):
         raise ValueError("时间和滚速必须是有限数值。")
     if not 1 <= scroll_speed <= 40:
@@ -98,8 +108,7 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
     if transition_ms <= 0:
         raise ValueError("切帧时长必须大于 0。")
     if fast_clear:
-        # Maximum legal speed is 500 / 6 * 10. Round UP to avoid exceeding it.
-        transition_ms = math.ceil(1.1 * time_range / (500 / 6 * 10) * 1000) / 1000
+        transition_ms = minimum_transition_ms(scroll_speed)
     # A transition moves 1.1 complete playfield heights, including edge margins.
     fast_multiplier = 1.1 * time_range / transition_ms
     fast_beat = 500 * 10 / fast_multiplier
@@ -126,7 +135,10 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
     start_ms, end_ms = frame_times[0][0], frame_times[-1][1]
     if start_ms - transition_ms < 100:
         raise ValueError("进场前至少保留 100 ms；请推迟第一帧开始时间。")
-    counts = [math.ceil((end - start) / 50) for start, end in frame_times]
+    anchors = [min(transition_ms * 2, (end - start) / 2) if anchor_reference else 0
+               for start, end in frame_times]
+    counts = [math.ceil((end - start - anchor) / 50)
+              for (start, end), anchor in zip(frame_times, anchors)]
     if 60000 - (sum(counts) - 1) * 0.01 < 6:
         raise ValueError("展示时间过长，无法分配不同的合法慢速 BPM。")
     points = [Point(0, 500, 1), Point(start_ms - transition_ms, fast_beat, 10)]
@@ -137,9 +149,13 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
         frame = {"pattern": rows, "start_ms": start, "end_ms": end,
                  "entry_start_ms": entry_start, "exit_end_ms": end + transition_ms}
         frame_plans.append(frame)
+        if anchors[index]:
+            # Brief near-stationary 500 ms segments keep the reference BPM dominant
+            # even when thousands of video transitions would otherwise outweigh the lead-in.
+            points.append(Point(start, 500, 0.01))
         for i in range(count):
             # Keep values unique across ALL frames, not just within one hold.
-            points.append(Point(start + i * 50, 60000 - slow_index * 0.01, 0.01))
+            points.append(Point(start + anchors[index] + i * 50, 60000 - slow_index * 0.01, 0.01))
             slow_index += 1
         if index == len(frames) - 1:
             points.append(Point(end, fast_beat, 10))
@@ -175,6 +191,8 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
             for column, pixel in enumerate(line):
                 if pixel == "#":
                     notes.append({"frame": index, "column": column, "row": row, "time_ms": time, "y": y})
+    if not notes:
+        raise ValueError("所有帧均为空白，至少需要一个 #；视频需要包含亮部。")
     notes.sort(key=lambda n: (n["time_ms"], n["column"]))
     base = most_common_beat_length(points, notes[-1]["time_ms"])
     if not math.isclose(base, 500, abs_tol=1e-9):
@@ -198,9 +216,9 @@ def number(value):
     return f"{value:.9f}".rstrip("0").rstrip(".")
 
 
-def encode_osu(plan):
+def encode_osu(plan, audio_filename="silence.wav"):
     lines = [
-        "osu file format v14", "", "[General]", "AudioFilename: silence.wav",
+        "osu file format v14", "", "[General]", f"AudioFilename: {audio_filename}",
         "AudioLeadIn: 0", f"PreviewTime: {int(plan['start_ms'])}", "Countdown: 0",
         "SampleSet: Soft", "Mode: 3", "", "[Metadata]", "Title: SV Pattern",
         "Artist: osu-paint", "Creator: osu-paint",
@@ -223,7 +241,7 @@ def encode_osu(plan):
 
 def make_preview(plan):
     # Geometry preview only: native skins, object lifetime and judgement aren't simulated.
-    data = json.dumps(plan, ensure_ascii=False)
+    data = json.dumps(plan, ensure_ascii=False).replace("<", "\\u003c")
     pattern = html.escape("\n".join(plan["pattern"]))
     return """<!doctype html><html lang="zh-CN"><meta charset="utf-8">
 <title>osu-paint 位置预览</title><style>
@@ -244,11 +262,14 @@ const points=plan.points,positions=[0];
 const speed=p=>plan.base_beat_length_ms/p.beat_length*p.sv;
 for(let i=1;i<points.length;i++)positions.push(positions[i-1]+(points[i].time-points[i-1].time)*speed(points[i-1]));
 function position(t){let i=points.length-1;while(i>0&&points[i].time>t)i--;return positions[i]+(t-points[i].time)*speed(points[i]);}
+const notePositions=plan.notes.map(n=>position(n.time_ms));
+function lowerBound(a,x){let lo=0,hi=a.length;while(lo<hi){let m=(lo+hi)>>>1;if(a[m]<x)lo=m+1;else hi=m;}return lo;}
 seek.min=plan.start_ms-plan.transition_ms-40;seek.max=plan.end_ms+plan.transition_ms+40;seek.value=plan.start_ms;
 document.getElementById('info').textContent=`${plan.keys}K · ${plan.frames.length} 帧 · 滚速 ${plan.scroll_speed} · ${plan.start_ms}–${plan.end_ms} ms；单帧最大漂移约 ${plan.drift_at_658px.toFixed(4)} px（658 px 高度）。`;
 function draw(){let t=+seek.value,w=canvas.width/plan.keys;ctx.clearRect(0,0,360,768);
 ctx.strokeStyle='#293047';for(let c=1;c<plan.keys;c++){ctx.beginPath();ctx.moveTo(c*w,0);ctx.lineTo(c*w,768);ctx.stroke();}
-ctx.fillStyle='#80e0de';for(const n of plan.notes){let y=(1-(position(n.time_ms)-position(t))/plan.time_range_ms)*658;ctx.fillRect(n.column*w+2,y-4,w-4,8);}
+const current=position(t),lower=current+(1-772/658)*plan.time_range_ms,upper=current+(1+4/658)*plan.time_range_ms;
+ctx.fillStyle='#80e0de';for(let i=lowerBound(notePositions,lower);i<plan.notes.length&&notePositions[i]<=upper;i++){const n=plan.notes[i];let y=(1-(notePositions[i]-current)/plan.time_range_ms)*658;ctx.fillRect(n.column*w+2,y-4,w-4,8);}
 const index=plan.frames.findIndex(f=>t>=f.start_ms&&t<=f.end_ms);
 document.getElementById('pattern').textContent=index<0?'空档 / 进场 / 换帧 / 退场':plan.frames[index].pattern.join('\\n');
 ctx.fillStyle='white';ctx.fillRect(0,657,360,2);time.textContent=t.toFixed(2)+' ms'+(index<0?'':` · 第 ${index+1} 帧`);}
@@ -257,18 +278,22 @@ seek.oninput=()=>{playing=false;draw();};function tick(now){if(playing){seek.val
 </script></html>"""
 
 
-def write_output(plan, output):
+def write_output(plan, output, *, audio_data=None):
     output.mkdir(parents=True, exist_ok=True)
-    (output / "pattern.osu").write_text(encode_osu(plan), encoding="utf-8")
-    with wave.open(str(output / "silence.wav"), "wb") as audio:
-        audio.setparams((1, 1, 8000, 0, "NONE", "not compressed"))
-        remaining = math.ceil((plan["end_ms"] + plan["transition_ms"] + 1000) * 8)
-        while remaining:
-            size = min(remaining, 8000)
-            audio.writeframes(b"\x80" * size)
-            remaining -= size
+    audio_filename = "silence.wav" if audio_data is None else "audio.ogg"
+    (output / "pattern.osu").write_text(encode_osu(plan, audio_filename), encoding="utf-8")
+    if audio_data is not None:
+        (output / audio_filename).write_bytes(audio_data)
+    else:
+        with wave.open(str(output / audio_filename), "wb") as audio:
+            audio.setparams((1, 1, 8000, 0, "NONE", "not compressed"))
+            remaining = math.ceil((plan["end_ms"] + plan["transition_ms"] + 1000) * 8)
+            while remaining:
+                size = min(remaining, 8000)
+                audio.writeframes(b"\x80" * size)
+                remaining -= size
     with zipfile.ZipFile(output / "pattern.osz", "w", zipfile.ZIP_DEFLATED) as archive:
-        for name in ("pattern.osu", "silence.wav"):
+        for name in ("pattern.osu", audio_filename):
             archive.write(output / name, name)
     (output / "report.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
     (output / "preview.html").write_text(make_preview(plan), encoding="utf-8")
@@ -276,19 +301,34 @@ def write_output(plan, output):
 
 def main():
     parser = argparse.ArgumentParser(description="用文本像素图生成 osu!mania lazer 近似停帧谱面。")
-    parser.add_argument("pattern", type=Path, help="# 是音符，. 是空白；1–10 列，多帧以独立的 --- 行分隔")
+    parser.add_argument("pattern", type=Path, help="文本图案；配合 --video 时为本地视频文件")
+    parser.add_argument("--video", action="store_true", help="导入视频及音轨，自动使用极速清场")
+    parser.add_argument("--fps", type=float, default=10, help="视频每秒帧数，可填小数，默认 10")
+    parser.add_argument("--width", type=int, default=10, help="视频画面宽度 / 按键列，1–10，默认 10")
+    parser.add_argument("--height", type=int, default=24, help="视频画面高度 / 行，1–128，默认 24")
     parser.add_argument("--start-ms", type=float, required=True, help="完整展示开始时间（ms）")
-    parser.add_argument("--end-ms", type=float, required=True, help="完整展示结束时间（ms）")
+    parser.add_argument("--end-ms", type=float, help="文本图案必填；视频结束时间由 FPS 与实际帧数确定")
     parser.add_argument("--scroll-speed", type=float, default=27, help="须与 lazer 设置相同，默认 27")
     parser.add_argument("--transition-ms", type=float, default=12, help="进场/退场各自时长，默认 12 ms")
     parser.add_argument("--fast-clear", action="store_true", help="自动以合法最高速度清场，覆盖手动切帧时长")
     parser.add_argument("--output", type=Path, default=Path("output"), help="输出目录，同名生成文件会覆盖")
     args = parser.parse_args()
     try:
-        frames = parse_frames(args.pattern.read_text(encoding="utf-8-sig"))
-        plan = compile_frames(frames, args.start_ms, args.end_ms, args.scroll_speed, args.transition_ms,
-                              fast_clear=args.fast_clear)
-        write_output(plan, args.output)
+        if args.video:
+            if args.end_ms is not None:
+                raise ValueError("视频结束时间自动计算，请不要传 --end-ms。")
+            from osu_paint_video import import_video
+            result = import_video(args.pattern, fps=args.fps, width=args.width, height=args.height,
+                                  start_ms=args.start_ms, scroll_speed=args.scroll_speed)
+            plan = result["plan"]
+            write_output(plan, args.output, audio_data=result["audio"])
+        else:
+            if args.end_ms is None:
+                raise ValueError("文本图案需要 --end-ms。")
+            frames = parse_frames(args.pattern.read_text(encoding="utf-8-sig"))
+            plan = compile_frames(frames, args.start_ms, args.end_ms, args.scroll_speed, args.transition_ms,
+                                  fast_clear=args.fast_clear)
+            write_output(plan, args.output)
     except (ValueError, OSError) as error:
         parser.error(str(error))
     print(f"已生成 {args.output.resolve() / 'pattern.osz'}")

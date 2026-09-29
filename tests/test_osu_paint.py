@@ -231,6 +231,53 @@ class ExportTests(unittest.TestCase):
             with self.subTest(args=args), self.assertRaises(ValueError):
                 compile_pattern(["#"], **args)
 
+    def test_video_blank_frames_keep_their_time_and_have_no_notes(self):
+        frames = [[".."], ["#."], [".."], [".#"], [".."]]
+        windows = [(2000 + i * 100, 2099 + i * 100) for i in range(5)]
+        plan = compile_frames(frames, frame_times=windows, fast_clear=True,
+                              allow_empty_frames=True, anchor_reference=True)
+        self.assertEqual([f["pattern"] for f in plan["frames"]], frames)
+        self.assertEqual({n["frame"] for n in plan["notes"]}, {1, 3})
+        points, notes = decode(encode_osu(plan))
+        for index, (start, end) in enumerate(windows):
+            current = position(points, (start + end) / 2, plan["time_range_ms"])
+            visible = [x for x, t in notes
+                       if 0 <= 1 - (position(points, t, plan["time_range_ms"]) - current) <= 1]
+            self.assertEqual(len(visible), 0 if index % 2 == 0 else 1)
+        with self.assertRaisesRegex(ValueError, "至少"):
+            compile_frames([[".."]], 2000, 3000, allow_empty_frames=True)
+
+    def test_long_video_keeps_reference_bpm_at_60_fps(self):
+        count = 12000
+        period = 1000 / 60
+        windows = [(2000 + i * period, 2000 + (i + 1) * period - 0.575)
+                   for i in range(count)]
+        plan = compile_frames([["#"]] * count, frame_times=windows, fast_clear=True,
+                              allow_empty_frames=True, anchor_reference=True)
+        self.assertEqual(plan["base_beat_length_ms"], 500)
+        self.assertEqual(len(plan["notes"]), count)
+        self.assertLess(plan["drift_at_658px"], 0.1)
+
+    def test_imported_audio_is_referenced_and_packaged_instead_of_silence(self):
+        plan = compile_pattern(["#"], 2000, 3000)
+        audio = b"OggS test audio"
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            write_output(plan, output, audio_data=audio)
+            with zipfile.ZipFile(output / "pattern.osz") as archive:
+                self.assertEqual(set(archive.namelist()), {"pattern.osu", "audio.ogg"})
+                self.assertEqual(archive.read("audio.ogg"), audio)
+                self.assertIn("AudioFilename: audio.ogg", archive.read("pattern.osu").decode())
+            self.assertFalse((output / "silence.wav").exists())
+
+    def test_video_metadata_cannot_break_out_of_preview_script(self):
+        plan = compile_pattern(["#"], 2000, 3000)
+        plan["video"] = {"filename": "</script><script>throw new Error('injected')</script>"}
+        preview = make_preview(plan)
+        self.assertEqual(preview.count("<script>"), 1)
+        self.assertEqual(preview.count("</script>"), 1)
+        self.assertIn(r"\u003c/script>", preview)
+
     def test_osz_is_self_contained(self):
         plan = compile_pattern(["#.", "##"], 500, 2500)
         with tempfile.TemporaryDirectory() as directory:

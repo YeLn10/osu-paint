@@ -1,6 +1,9 @@
 """Native desktop editor for the existing osu!mania pattern compiler."""
 
+from bisect import bisect_left, bisect_right
 from pathlib import Path
+import base64
+import math
 import json
 import os
 import queue
@@ -10,6 +13,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from osu_paint import Point, Timeline, compile_frames, number, parse_frames, write_output
+from osu_paint_video import ImportCancelled, import_video as read_video, validate_video_options
 
 
 HEART = [".##.##.", "#######", "#######", ".#####.", "..###..", "...#..."]
@@ -35,6 +39,12 @@ class PaintApp:
         self.plan = None
         self.playing = False
         self.exporting = False
+        self.importing = False
+        self.import_dialog = None
+        self.import_results = queue.Queue()
+        self.import_cancel = threading.Event()
+        self.video = None
+        self.audio_data = None
         self.preview_job = None
         self.export_results = queue.Queue()
         self.last_output = None
@@ -80,7 +90,7 @@ class PaintApp:
         ttk.Label(header, text="osu!paint", style="Title.TLabel").pack(side="left")
         ttk.Label(header, text="  /  MANIA SV STUDIO", style="Muted.TLabel").pack(side="left", pady=(9, 0))
         for label, command in [("保存项目", self.save_pattern), ("打开", self.open_pattern),
-                               ("编辑文本", self.edit_text)]:
+                               ("编辑文本", self.edit_text), ("导入视频", self.import_video)]:
             ttk.Button(header, text=label, command=command).pack(side="right", padx=(8, 0))
 
         body = ttk.Frame(self.root, padding=(24, 0, 24, 0))
@@ -250,9 +260,11 @@ class PaintApp:
         rows = self.frames[self.selected]
         self.editor_info.set(f"{len(rows[0])}K  ·  {len(rows)} 行  ·  第 {self.selected + 1} / {len(self.frames)} 帧")
         self.frame_list.delete(0, "end")
+        items = []
         for i, frame in enumerate(self.frames):
             timing = f"  ·  {self.frame_times[i][0]}–{self.frame_times[i][1]} ms" if self.timing_mode.get() == "自由模式" else ""
-            self.frame_list.insert("end", f"  {i + 1:02d}    {'●' if i == self.selected else '○'}    {sum(row.count('#') for row in frame)} 个音符{timing}")
+            items.append(f"  {i + 1:02d}    {'●' if i == self.selected else '○'}    {sum(row.count('#') for row in frame)} 个音符{timing}")
+        self.frame_list.insert("end", *items)
         self.frame_list.selection_set(self.selected)
         self.frame_list.see(self.selected)
         self.delete_button.configure(state="normal" if len(self.frames) > 1 else "disabled")
@@ -349,14 +361,21 @@ class PaintApp:
             return
         rows = simpledialog.askinteger("新建画布", "图案行数：", initialvalue=6, minvalue=1, parent=self.root)
         if rows is not None:
+            self.video, self.audio_data = None, None
             self.frames, self.selected = [["." * keys for _ in range(rows)]], 0
             self.frame_times = [self.uniform_times.copy()]
             self.free_times_initialized = False
             self._show_time_fields()
             self._changed()
 
-    def load_text(self, text):
-        frames = parse_frames(text)
+    def load_text(self, text, *, keep_video=True):
+        frames = parse_frames(text, allow_empty=keep_video and self.video is not None)
+        if keep_video and self.video is not None:
+            if len(frames[0]) > 128:
+                raise ValueError("视频项目的画面高度须为 1–128 行。")
+            self.video = dict(self.video, width=len(frames[0][0]), height=len(frames[0]))
+        if not keep_video:
+            self.video, self.audio_data = None, None
         if len(frames) != len(self.frames):
             self.frame_times = self.frame_times[:len(frames)]
             while len(self.frame_times) < len(frames):
@@ -375,15 +394,36 @@ class PaintApp:
     def _project_data(self):
         settings = {key: variable.get() for key, variable in self.fields.items()}
         settings["start_ms"], settings["end_ms"] = self.uniform_times
-        return {"format": "osu-paint", "version": 1, "frames": self.frames,
+        data = {"format": "osu-paint", "version": 1, "frames": self.frames,
                 "frame_times": self.frame_times, "timing_mode": self.timing_mode.get(),
                 "settings": settings, "fast_clear": self.fast_clear.get()}
+        if self.video is not None:
+            data.update(version=2, video=self.video.copy(),
+                        audio=base64.b64encode(self.audio_data).decode("ascii") if self.audio_data is not None else None)
+        return data
 
     def load_project(self, data):
         try:
-            if data["format"] != "osu-paint" or data["version"] != 1:
+            if data["format"] != "osu-paint" or data["version"] not in (1, 2):
                 raise ValueError("不支持的项目版本。")
-            frames = parse_frames("\n---\n".join("\n".join(frame) for frame in data["frames"]))
+            video, audio = None, None
+            if data["version"] == 2:
+                video = data["video"]
+                if not isinstance(video, dict) or not isinstance(video["filename"], str):
+                    raise ValueError("项目中的视频信息无效。")
+                validate_video_options(fps=video["fps"], width=video["width"], height=video["height"],
+                                       start_ms=video["start_ms"], scroll_speed=float(data["settings"]["scroll_speed"]))
+                if not math.isfinite(video["duration_ms"]) or video["duration_ms"] <= 0:
+                    raise ValueError("项目中的视频时长无效。")
+                if data["audio"] is not None:
+                    audio = base64.b64decode(data["audio"], validate=True)
+                    if not audio.startswith(b"OggS"):
+                        raise ValueError("项目中的音轨无效。")
+                video = video.copy()
+            frames = parse_frames("\n---\n".join("\n".join(frame) for frame in data["frames"]),
+                                  allow_empty=video is not None)
+            if video is not None and (len(frames[0]), len(frames[0][0])) != (video["height"], video["width"]):
+                raise ValueError("视频分辨率与项目画面不一致。")
             windows = data["frame_times"]
             if len(windows) != len(frames) or any(len(w) != 2 for w in windows):
                 raise ValueError("项目中的帧时间不完整。")
@@ -394,6 +434,7 @@ class PaintApp:
                 raise ValueError("项目中的模式设置无效。")
         except (KeyError, TypeError) as error:
             raise ValueError("无法识别此项目文件。") from error
+        self.video, self.audio_data = video, audio
         self.frames, self.frame_times, self.selected = frames, windows, 0
         self.uniform_times = [settings["start_ms"], settings["end_ms"]]
         self.free_times_initialized = True
@@ -417,7 +458,7 @@ class PaintApp:
             if Path(filename).suffix.lower() == ".json":
                 self.load_project(json.loads(text))
             else:
-                self.load_text(text)
+                self.load_text(text, keep_video=False)
         except (OSError, ValueError) as error:
             messagebox.showerror("无法打开图案", str(error), parent=self.root)
             return
@@ -426,7 +467,7 @@ class PaintApp:
 
     def save_pattern(self):
         try:
-            parse_frames(self._text())
+            parse_frames(self._text(), allow_empty=self.video is not None)
         except ValueError as error:
             messagebox.showerror("图案还不能保存", str(error), parent=self.root)
             return
@@ -442,10 +483,146 @@ class PaintApp:
         except OSError as error:
             messagebox.showerror("保存失败", str(error), parent=self.root)
             return
-        self.dirty = text_only and self.timing_mode.get() == "自由模式"
+        self.dirty = text_only and (self.timing_mode.get() == "自由模式" or self.video is not None)
         self._update_editor()
-        self._status(f"图案已保存：{filename}（TXT 不保存时间参数，请用 JSON 保存项目）" if text_only
-                     else f"项目已保存：{filename}（包含各帧时间与参数）")
+        self._status(f"图案已保存：{filename}（TXT 不保存音轨与时间参数，请用 JSON 保存项目）" if text_only
+                     else f"项目已保存：{filename}（包含各帧时间、参数及已导入的音轨）")
+
+    def import_video(self):
+        if self.exporting or self.importing:
+            messagebox.showinfo("任务正在运行", "请等当前导入或导出完成。", parent=self.root)
+            return
+        if not self._can_discard():
+            return
+        filename = filedialog.askopenfilename(parent=self.root, title="导入视频及音乐",
+                                             filetypes=[("视频", "*.mp4 *.mkv *.webm *.avi *.mov *.wmv *.m4v"),
+                                                        ("所有文件", "*.*")])
+        if not filename:
+            return
+        dialog = self.import_dialog = tk.Toplevel(self.root)
+        dialog.title("视频 → 音符动画 + 音乐")
+        dialog.configure(background=BG)
+        dialog.transient(self.root)
+        dialog.grab_set()
+        panel = ttk.Frame(dialog, padding=20)
+        panel.pack(fill="both", expand=True)
+        ttk.Label(panel, text=Path(filename).name, style="Heading.TLabel", wraplength=480).grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 14))
+        self.video_fields = {}
+        inputs = []
+        for row, (key, label, value) in enumerate([
+                ("fps", "每秒帧数 / FPS（可填小数，≤60）", "10"),
+                ("width", "画面宽度 / 按键列（1–10）", "10"),
+                ("height", "画面高度 / 行（1–128）", "24"),
+                ("start_ms", "视频与音乐开始 / ms", self.uniform_times[0])], 1):
+            ttk.Label(panel, text=label, style="Muted.TLabel").grid(row=row, column=0, sticky="w", padx=(0, 16), pady=5)
+            variable = self.video_fields[key] = tk.StringVar(value=value)
+            entry = ttk.Entry(panel, textvariable=variable, width=12)
+            entry.grid(row=row, column=1, sticky="ew", pady=5)
+            inputs.append(entry)
+        ttk.Label(panel, text="亮部转为音符，暗部留空；画面缩放到所填列数 × 行数。\n"
+                  "自动启用极速清场和逐帧时间，音乐同时导入，无音轨则使用静音。\n"
+                  "较高 FPS / 分辨率会产生更多音符；桌面预览暂不播放音乐。",
+                  style="Muted.TLabel", wraplength=480).grid(row=5, column=0, columnspan=2, sticky="w", pady=(12, 8))
+        self.import_status = tk.StringVar(value="导入会替换当前画布；失败或取消时保留原项目。")
+        ttk.Label(panel, textvariable=self.import_status, wraplength=480, style="Muted.TLabel").grid(
+            row=6, column=0, columnspan=2, sticky="w", pady=8)
+        buttons = ttk.Frame(panel)
+        buttons.grid(row=7, column=0, columnspan=2, sticky="e", pady=(8, 0))
+
+        def cancel():
+            if self.importing:
+                self.import_cancel.set()
+                self.import_status.set("正在取消并回收视频处理进程…")
+                self.video_cancel_button.configure(state="disabled")
+            else:
+                dialog.destroy()
+                self.import_dialog = None
+
+        def start():
+            if self.importing:
+                return
+            try:
+                options = {key: (int(variable.get()) if key in ("width", "height") else float(variable.get()))
+                           for key, variable in self.video_fields.items()}
+                options["scroll_speed"] = float(self.fields["scroll_speed"].get())
+                validate_video_options(**options)
+            except ValueError as error:
+                messagebox.showerror("视频参数无效", str(error), parent=dialog)
+                return
+            self._stop()
+            self.importing = True
+            self.import_cancel.clear()
+            for entry in inputs:
+                entry.configure(state="disabled")
+            self.video_start_button.configure(state="disabled")
+            self.import_status.set("正在准备视频处理…")
+
+            def run():
+                try:
+                    result = read_video(filename, **options, cancel=self.import_cancel,
+                                        progress=lambda message: self.import_results.put(("progress", message)))
+                except Exception as error:
+                    self.import_results.put(("finished", (None, error)))
+                else:
+                    self.import_results.put(("finished", (result, None)))
+
+            threading.Thread(target=run, daemon=True).start()
+
+        self.video_cancel_button = ttk.Button(buttons, text="取消", command=cancel)
+        self.video_cancel_button.pack(side="left", padx=8)
+        self.video_start_button = ttk.Button(buttons, text="导入视频和音乐", command=start, style="Accent.TButton")
+        self.video_start_button.pack(side="left")
+        self.video_inputs = inputs
+        dialog.protocol("WM_DELETE_WINDOW", cancel)
+
+    def _apply_video(self, result):
+        plan = result["plan"]
+        self.video, self.audio_data = result["video"].copy(), result["audio"]
+        self.frames = [frame["pattern"].copy() for frame in plan["frames"]]
+        self.frame_times = [[number(frame["start_ms"]), number(frame["end_ms"])] for frame in plan["frames"]]
+        self.uniform_times = [number(plan["start_ms"]), number(plan["end_ms"])]
+        self.selected = 0
+        self.free_times_initialized = True
+        self.syncing_fields = True
+        self.timing_mode.set("自由模式")
+        self.fast_clear.set(True)
+        self.fields["scroll_speed"].set(number(plan["scroll_speed"]))
+        self._show_time_fields()
+        self.entries["transition_ms"].configure(state="disabled")
+        self._changed()
+        self._refresh_preview(compiled_plan=plan)
+
+    def _poll_video_import(self):
+        while True:
+            try:
+                kind, payload = self.import_results.get_nowait()
+            except queue.Empty:
+                return
+            if kind == "progress":
+                self.import_status.set(payload)
+                continue
+            self.importing = False
+            result, error = payload
+            if error is None and self.import_cancel.is_set():
+                error = ImportCancelled("已取消视频导入，原项目未改变。")
+            if error is not None and not isinstance(error, ImportCancelled):
+                for entry in self.video_inputs:
+                    entry.configure(state="normal")
+                self.video_start_button.configure(state="normal")
+                self.video_cancel_button.configure(state="normal")
+                self.import_status.set("导入失败，原项目未改变。请检查文件或参数后重试。")
+                messagebox.showerror("视频导入失败", str(error), parent=self.import_dialog)
+            else:
+                self.import_dialog.destroy()
+                self.import_dialog = None
+                if error is not None:
+                    self._status(str(error))
+                else:
+                    self._apply_video(result)
+                    audio = "音乐已导入，导出时会打包进谱面" if self.audio_data is not None else "视频没有音轨，导出使用静音"
+                    self._status(f"已导入 {len(self.frames)} 帧 · {number(self.video['fps'])} FPS · "
+                                 f"{self.video['width']} × {self.video['height']} · {audio}。请保存 JSON 项目保留音轨。")
 
     def edit_text(self):
         dialog = tk.Toplevel(self.root)
@@ -486,38 +663,46 @@ class PaintApp:
             self.root.after_cancel(self.preview_job)
         self.preview_job = self.root.after(180, self._refresh_preview)
 
-    def _refresh_preview(self):
+    def _refresh_preview(self, compiled_plan=None):
         if self.preview_job is not None:
             self.root.after_cancel(self.preview_job)
             self.preview_job = None
         self._stop()
         try:
-            values = {}
-            for key, variable in self.fields.items():
-                try:
-                    values[key] = float(variable.get())
-                except ValueError:
-                    raise ValueError("时间与滚速必须填写数字。") from None
-            windows = None
-            if self.timing_mode.get() == "自由模式":
-                try:
-                    windows = [tuple(map(float, window)) for window in self.frame_times]
-                except ValueError:
-                    raise ValueError("每一帧的开始和结束时间都必须填写数字。") from None
-            self.plan = compile_frames(self.frames, **values, frame_times=windows, fast_clear=self.fast_clear.get())
+            if compiled_plan is not None:
+                self.plan = compiled_plan
+            else:
+                values = {}
+                for key, variable in self.fields.items():
+                    try:
+                        values[key] = float(variable.get())
+                    except ValueError:
+                        raise ValueError("时间与滚速必须填写数字。") from None
+                windows = None
+                if self.timing_mode.get() == "自由模式":
+                    try:
+                        windows = [tuple(map(float, window)) for window in self.frame_times]
+                    except ValueError:
+                        raise ValueError("每一帧的开始和结束时间都必须填写数字。") from None
+                self.plan = compile_frames(self.frames, **values, frame_times=windows, fast_clear=self.fast_clear.get(),
+                                            allow_empty_frames=self.video is not None, anchor_reference=self.video is not None)
+            if self.video is not None:
+                self.plan["video"] = self.video.copy()
         except ValueError as error:
             self.plan = None
             self._status(str(error), error=True)
         if self.plan is not None:
             self.timeline = Timeline([Point(**point) for point in self.plan["points"]])
             self.note_distances = [self.timeline.position(note["time_ms"]) for note in self.plan["notes"]]
+            self.frame_starts = [frame["start_ms"] for frame in self.plan["frames"]]
             self.seek_min = max(0, self.plan["start_ms"] - self.plan["transition_ms"] - 180)
             self.seek_max = self.plan["end_ms"] + self.plan["transition_ms"] + 180
             self.seek.configure(from_=self.seek_min, to=self.seek_max)
             self.seek_time.set(self.plan["frames"][self.selected]["start_ms"])
             self._status(f"{self.plan['keys']}K · {len(self.frames)} 帧 · {len(self.plan['notes'])} 音符 · "
                          f"{'极速' if self.fast_clear.get() else ''}切帧 {self.plan['transition_ms']:.3f} ms · "
-                         f"单帧最大预计漂移 {self.plan['drift_at_658px']:.4f} px / 658 px")
+                         f"单帧最大预计漂移 {self.plan['drift_at_658px']:.4f} px / 658 px"
+                         + (" · 已带视频音轨" if self.audio_data is not None else ""))
         state = "normal" if self.plan is not None else "disabled"
         self.play_button.configure(state=state)
         self.seek.configure(state=state)
@@ -543,7 +728,10 @@ class PaintApp:
             self.preview.create_rectangle(left + col * lane, top, left + (col + 1) * lane, top + full_h,
                                           fill="#141c2b" if col % 2 == 0 else "#101725", outline="#253044")
             self.preview.create_text(left + (col + 0.5) * lane, top + full_h + 13 * self.scale, text=str(col + 1), fill=MUTED, font=("Segoe UI", 9))
-        for note, distance in zip(self.plan["notes"], self.note_distances):
+        first = bisect_left(self.note_distances, position + (1 - (full_h + note_half) / stage_h) * self.plan["time_range_ms"])
+        last = bisect_right(self.note_distances, position + (1 + note_half / stage_h) * self.plan["time_range_ms"])
+        for index in range(first, last):
+            note, distance = self.plan["notes"][index], self.note_distances[index]
             y = (1 - (distance - position) / self.plan["time_range_ms"]) * stage_h
             # Keep drawing below judgement until physically off stage. Miss fades aren't simulated.
             if -note_half <= y <= full_h + note_half:
@@ -552,7 +740,8 @@ class PaintApp:
                                               min(top + full_h, top + y + note_half),
                                               fill=ACCENT if note["column"] % 2 == 0 else MINT, outline="", tags="note")
         self.preview.create_line(left, top + stage_h, left + stage_w, top + stage_h, fill=INK, width=2)
-        frame = next((i + 1 for i, item in enumerate(self.plan["frames"]) if item["start_ms"] <= current <= item["end_ms"]), None)
+        index = bisect_right(self.frame_starts, current) - 1
+        frame = index + 1 if index >= 0 and current <= self.plan["frames"][index]["end_ms"] else None
         phase = f"第 {frame} / {len(self.frames)} 帧" if frame is not None else "空档 / 进场 / 换帧 / 退场"
         self.time_label.set(f"{current:,.2f} ms   ·   {phase}")
 
@@ -579,6 +768,8 @@ class PaintApp:
             self.play_button.configure(text="Ⅱ 暂停")
 
     def _tick(self):
+        if self.importing:
+            self._poll_video_import()
         if self.playing and self.plan is not None:
             now = time.perf_counter()
             current = min(self.seek_max, self.seek_time.get() + (now - self.last_tick) * 1000)
@@ -610,7 +801,7 @@ class PaintApp:
             self.output_dir.set(directory)
 
     def export(self):
-        if self.exporting:
+        if self.exporting or self.importing:
             return
         # Recompile immediately so edits still waiting for the debounce are never lost.
         self._refresh_preview()
@@ -621,20 +812,22 @@ class PaintApp:
             return
         try:
             output = Path(self.output_dir.get()).expanduser().resolve()
-            exists = any((output / name).exists() for name in OUTPUT_FILES)
+            names = tuple("audio.ogg" if name == "silence.wav" and self.audio_data is not None else name
+                          for name in OUTPUT_FILES)
+            exists = any((output / name).exists() for name in names)
         except (OSError, ValueError) as error:
             self._status(f"导出目录无效：{error}", error=True)
             return
         if exists and not messagebox.askyesno("确认覆盖", "目录中已有生成文件。要覆盖同名的谱面、音频、预览和报告吗？\n其他文件不会删除。", parent=self.root):
             return
-        plan = self.plan
+        plan, audio_data = self.plan, self.audio_data
         self.exporting = True
         self.export_button.configure(state="disabled", text="正在导出…")
         self._status("正在导出当前图案快照…")
 
         def run():
             try:
-                write_output(plan, output)
+                write_output(plan, output, audio_data=audio_data)
             except Exception as error:
                 self.export_results.put((output, error))
             else:
@@ -650,6 +843,9 @@ class PaintApp:
                 messagebox.showerror("无法打开目录", str(error), parent=self.root)
 
     def close(self):
+        if self.importing:
+            messagebox.showinfo("正在导入", "请先取消视频导入或等它完成，再关闭窗口。", parent=self.root)
+            return
         if self.exporting:
             messagebox.showinfo("正在导出", "请等导出完成后再关闭窗口。", parent=self.root)
             return
