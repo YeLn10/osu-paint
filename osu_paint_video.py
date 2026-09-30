@@ -1,5 +1,6 @@
 """Import local video as timestamped note frames and a portable Ogg audio track."""
 
+from fractions import Fraction
 import math
 from pathlib import Path
 import re
@@ -18,27 +19,47 @@ class ImportCancelled(Exception):
 
 
 def resolve_video_options(*, fps, width, height, start_ms, scroll_speed, target_client="lazer",
-                          threshold=128, brightness=0, contrast=1, invert=False, fit="stretch", game_fps=None):
+                          threshold=128, brightness=0, contrast=1, invert=False, fit="stretch", game_fps=None,
+                          refresh_hz=None, refresh_phase_ms=0, merge_holds=False):
     if not math.isfinite(fps) or not 0 < fps <= 60:
         raise ValueError("视频 FPS 须大于 0 且不超过 60，可以填写小数。")
     if not isinstance(height, int) or not 1 <= height <= 128:
         raise ValueError("视频高度须为 1–128 行。")
+    if not isinstance(merge_holds, bool):
+        raise ValueError("连续单键转长条必须是开关值。")
+    if refresh_hz is not None:
+        if game_fps is not None:
+            raise ValueError("刷新率排帧与旧版游戏 FPS 排帧不能同时启用。")
+        if isinstance(refresh_hz, bool) or not math.isfinite(refresh_hz) or not 20 <= refresh_hz <= 1000:
+            raise ValueError("实际刷新率须为 20–1000 Hz，可填写小数。")
+    if not math.isfinite(refresh_phase_ms):
+        raise ValueError("画面相位偏移必须是有限数值。")
+    if refresh_phase_ms and (refresh_hz is None or abs(refresh_phase_ms) > 1000 / refresh_hz):
+        raise ValueError("画面相位偏移须在正负一个刷新周期内，并启用刷新率排帧。")
     if game_fps is not None:
         if target_client != "stable":
             raise ValueError("游戏 FPS 优化只支持 stable。")
         if not isinstance(game_fps, int) or not 60 <= game_fps <= 999:
             raise ValueError("游戏 FPS 须为 60–999 的整数。")
-        maximum_height = math.floor(1000 / game_fps) - 3
-        if maximum_height < 1:
-            raise ValueError("游戏 FPS 太高，无法留出整数毫秒切帧；请降到 250 FPS 或以下。")
-        height = min(height, maximum_height)
-        divisor = max(math.ceil(game_fps / 60), 1, round(game_fps / fps))
-        fps = game_fps / divisor
+    clock_hz = refresh_hz if refresh_hz is not None else game_fps
+    if clock_hz is not None:
+        if target_client == "stable":
+            maximum_height = math.floor(1000 / clock_hz) - 3
+            if maximum_height < 1:
+                raise ValueError("刷新率太高，stable 无法留出整数毫秒切帧；请使用 250 Hz / FPS 或以下。")
+            height = min(height, maximum_height)
+        divisor = max(math.ceil(clock_hz / 60), 1, round(clock_hz / fps))
+        fps = clock_hz / divisor
+        if minimum_transition_ms(scroll_speed, target_client, height) >= 1000 / clock_hz:
+            raise ValueError("切帧无法放入一个刷新周期；请提高滚速或降低目标刷新率。")
     options = dict(fps=fps, width=width, height=height, start_ms=start_ms, scroll_speed=scroll_speed,
                    target_client=target_client, threshold=threshold, brightness=brightness,
                    contrast=contrast, invert=invert, fit=fit)
     _validate_video_options(**options)
-    options["game_fps"] = game_fps
+    if start_ms + refresh_phase_ms - minimum_transition_ms(scroll_speed, target_client, height) < 100:
+        raise ValueError("画面相位调整后，进场前仍须保留至少 100 ms。")
+    options.update(game_fps=game_fps, refresh_hz=refresh_hz, refresh_phase_ms=refresh_phase_ms,
+                   merge_holds=merge_holds)
     return options
 
 
@@ -92,10 +113,12 @@ def _pixel_frame(block, width, *, threshold=128, brightness=0, contrast=1, inver
 
 def preview_video_frame(path, *, frame_index=0, fps=10, width=10, height=24, start_ms=2000,
                         scroll_speed=27, target_client="lazer", threshold=128, brightness=0,
-                        contrast=1, invert=False, fit="stretch", cancel=None, game_fps=None):
+                        contrast=1, invert=False, fit="stretch", cancel=None, game_fps=None,
+                        refresh_hz=None, refresh_phase_ms=0, merge_holds=False):
     resolved = resolve_video_options(fps=fps, width=width, height=height, start_ms=start_ms,
                                      scroll_speed=scroll_speed, target_client=target_client, threshold=threshold,
-                                     brightness=brightness, contrast=contrast, invert=invert, fit=fit, game_fps=game_fps)
+                                     brightness=brightness, contrast=contrast, invert=invert, fit=fit, game_fps=game_fps,
+                                     refresh_hz=refresh_hz, refresh_phase_ms=refresh_phase_ms, merge_holds=merge_holds)
     fps, height = resolved["fps"], resolved["height"]
     if not isinstance(frame_index, int) or not 0 <= frame_index < MAX_VIDEO_FRAMES:
         raise ValueError(f"预览帧序号须在 1–{MAX_VIDEO_FRAMES} 之间。")
@@ -155,12 +178,14 @@ def _run_ffmpeg(arguments, cancel):
 
 def import_video(path, *, fps=10, width=10, height=24, start_ms=2000, scroll_speed=27,
                  progress=None, cancel=None, target_client="lazer", threshold=128, brightness=0,
-                 contrast=1, invert=False, fit="stretch", game_fps=None):
+                 contrast=1, invert=False, fit="stretch", game_fps=None,
+                 refresh_hz=None, refresh_phase_ms=0, merge_holds=False):
     requested_fps, requested_height = fps, height
     resolved = resolve_video_options(fps=fps, width=width, height=height,
                                      start_ms=start_ms, scroll_speed=scroll_speed, target_client=target_client,
                                      threshold=threshold, brightness=brightness, contrast=contrast,
-                                     invert=invert, fit=fit, game_fps=game_fps)
+                                     invert=invert, fit=fit, game_fps=game_fps,
+                                     refresh_hz=refresh_hz, refresh_phase_ms=refresh_phase_ms, merge_holds=merge_holds)
     fps, height = resolved["fps"], resolved["height"]
     transition = minimum_transition_ms(scroll_speed, target_client, height)
     path = Path(path).expanduser().resolve()
@@ -197,20 +222,31 @@ def import_video(path, *, fps=10, width=10, height=24, start_ms=2000, scroll_spe
             block = pixels[index * frame_size:(index + 1) * frame_size]
             frames.append(_pixel_frame(block, width, threshold=threshold, brightness=brightness,
                                        contrast=contrast, invert=invert))
-        period = 1000 / fps
-        if game_fps is None:
-            starts = [start_ms + i * period for i in range(count + 1)]
+        clock_hz = refresh_hz if refresh_hz is not None else game_fps
+        # Derive EVERY boundary from its index, never by repeatedly adding a
+        # rounded period. Retain fractional refresh clocks such as 60000/1001.
+        period_exact = (Fraction(1000) / Fraction(str(fps)) if clock_hz is None else
+                        Fraction(1000 * round(clock_hz / fps)) / Fraction(str(clock_hz)))
+        period = float(period_exact)
+        origin = Fraction(str(start_ms)) + Fraction(str(refresh_phase_ms))
+        if clock_hz is None:
+            starts = [float(origin + i * period_exact) for i in range(count + 1)]
             windows = [(starts[i], starts[i + 1] - (transition if i < count - 1 else 0))
                        for i in range(count)]
         else:
-            post_margin = max(1, math.floor((1000 / game_fps - transition) / 2))
-            starts = [math.floor(start_ms)] + [math.floor(start_ms + i * period - post_margin) for i in range(1, count)]
+            refresh_period = Fraction(1000) / Fraction(str(clock_hz))
+            post_margin = (refresh_period - Fraction(str(transition))) / 2
+            if game_fps is not None:
+                post_margin = max(1, math.floor(post_margin))  # Preserve old project timing.
+            quantize = math.floor if target_client == "stable" else float
+            starts = [quantize(origin)] + [quantize(origin + i * period_exact - post_margin)
+                                          for i in range(1, count)]
             windows = [(starts[i], starts[i + 1] - transition) for i in range(count - 1)]
-            windows.append((starts[-1], math.floor(start_ms + count * period)))
+            windows.append((starts[-1], quantize(origin + count * period_exact)))
         report("正在编译谱面与视频时间轴…")
         plan = compile_frames(frames, scroll_speed=scroll_speed, frame_times=windows,
                               fast_clear=True, allow_empty_frames=True, anchor_reference=True,
-                              target_client=target_client)
+                              target_client=target_client, merge_holds=merge_holds)
         audio_data = None
         if re.search(r"^\s*Stream #0:\d+.*Audio:", log, re.MULTILINE):
             report("正在提取音乐并对齐视频开始时间…（可取消）")
@@ -228,6 +264,10 @@ def import_video(path, *, fps=10, width=10, height=24, start_ms=2000, scroll_spe
              "start_ms": start_ms, "duration_ms": count * period,
              "threshold": threshold, "brightness": brightness, "contrast": contrast, "invert": invert, "fit": fit}
     if game_fps is not None:
-        video.update(game_fps=game_fps, requested_fps=requested_fps, requested_height=requested_height)
+        video["game_fps"] = game_fps
+    if refresh_hz is not None:
+        video.update(refresh_hz=refresh_hz, refresh_phase_ms=refresh_phase_ms)
+    if clock_hz is not None:
+        video.update(requested_fps=requested_fps, requested_height=requested_height)
     plan["video"] = video.copy()
     return {"plan": plan, "audio": audio_data, "video": video}

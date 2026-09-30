@@ -4,6 +4,7 @@ import argparse
 from bisect import bisect_right
 from collections import defaultdict
 from dataclasses import dataclass
+from fractions import Fraction
 import html
 import json
 import math
@@ -108,9 +109,26 @@ def minimum_transition_ms(scroll_speed, target_client="lazer", height=1):
     return minimum
 
 
+def _note_runs(rows, merge_holds):
+    for column in range(len(rows[0])):
+        row = 0
+        while row < len(rows):
+            if rows[row][column] == ".":
+                row += 1
+                continue
+            top = row
+            if merge_holds:
+                while row + 1 < len(rows) and rows[row + 1][column] == "#":
+                    row += 1
+            yield column, top, row
+            row += 1
+
+
 def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transition_ms=12,
                    *, frame_times=None, fast_clear=False, allow_empty_frames=False,
-                   anchor_reference=False, target_client="lazer"):
+                   anchor_reference=False, target_client="lazer", merge_holds=False):
+    if not isinstance(merge_holds, bool):
+        raise ValueError("连续单键转长条必须是开关值。")
     if not frames:
         raise ValueError("至少需要一帧图案。")
     frames = parse_frames("\n---\n".join("\n".join(rows) for rows in frames),
@@ -168,23 +186,31 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
     start_ms, end_ms = frame_times[0][0], frame_times[-1][1]
     if start_ms - transition_ms < 100:
         raise ValueError("进场前至少保留 100 ms；请推迟第一帧开始时间。")
-    note_frames = list(range(len(frames)))
-    if target_client == "stable":
-        # Stable's positive red lines have no upper beat-length clamp. Reusing
-        # identical pictures avoids needless sweeps while keeping drift below half a row.
-        slow_beat = 1e9
-        reuse_distance = min(0.18 * time_range, 0.3 * time_range / len(frames[0]))
-        for i in range(1, len(frames)):
-            gap = frame_times[i][0] - frame_times[i - 1][1]
-            hold = frame_times[i][1] - frame_times[note_frames[i - 1]][0]
-            distance = hold * 500 / slow_beat * 0.01
-            if (frames[i] == frames[i - 1] and gap <= 2 * transition_ms + 1e-7
-                    and distance <= reuse_distance):
-                note_frames[i] = note_frames[i - 1]
     anchors = [min(transition_ms * 2, (end - start) / 2) if anchor_reference else 0
                for start, end in frame_times]
     if target_client == "stable":
         anchors = [0] * len(frames)
+    counts = [math.ceil((end - start - anchor) / 50)
+              for (start, end), anchor in zip(frame_times, anchors)]
+    if target_client == "lazer" and 60000 - (sum(counts) - 1) * 0.01 < 6:
+        raise ValueError("展示时间过长，无法分配不同的合法慢速 BPM。")
+    note_frames = list(range(len(frames)))
+    # Reuse identical pictures on both clients, but never bridge a deliberate gap
+    # or let the total (including reference anchors) drift beyond half a row.
+    maximum_counts = sum(math.ceil((end - start) / 50) for start, end in frame_times)
+    slow_beat = 1e9 if target_client == "stable" else 60000 - (maximum_counts - 1) * 0.01
+    reuse_distance = min(0.18 * time_range, 0.3 * time_range / len(frames[0]))
+    if target_client == "lazer":
+        reuse_distance = min(reuse_distance, 0.5 * time_range / 658)
+    for i in range(1, len(frames)):
+        first = note_frames[i - 1]
+        gap = frame_times[i][0] - frame_times[i - 1][1]
+        hold = frame_times[i][1] - frame_times[first][0]
+        anchored = anchors[first]
+        distance = anchored * 0.01 + (hold - anchored) * 500 / slow_beat * 0.01
+        if frames[i] == frames[i - 1] and gap <= 2 * transition_ms + 1e-7 and distance <= reuse_distance:
+            note_frames[i] = first
+            anchors[i] = 0  # No sweep means no corresponding reference-BPM anchor is needed.
     counts = [math.ceil((end - start - anchor) / 50)
               for (start, end), anchor in zip(frame_times, anchors)]
     if target_client == "lazer" and 60000 - (sum(counts) - 1) * 0.01 < 6:
@@ -196,7 +222,7 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
         nonlocal fast_index
         # Exit uses up to three red lines; explicit gaps add an entry line.
         # Vary their exported doubles so a long video cannot accumulate one fast BPM.
-        beat = round(500 * 5 / multiplier * (1 + (fast_index + 1) / (4 * len(frames) + 3)), 9)
+        beat = round(500 * 5 / multiplier * (1 + (fast_index + 1) / ((len(frames[0]) + 2) * len(frames) + 3)), 9)
         while beat in fast_beats:
             beat = round(beat + 1e-8, 9)
         fast_beats.add(beat)
@@ -213,6 +239,25 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
 
     def stable_exit(first, end, duration, hold_distance):
         height = len(frames[0])
+        if merge_holds and fast_clear:
+            # Only the head/tail rows require distinct integer timestamps. Keep
+            # the old picture still for the unused part of the transition slot.
+            levels = sorted({row for _, top, bottom in _note_runs(frames[first], True)
+                             for row in (top, bottom)}, reverse=True)
+            sweep_start = end + duration - len(levels) - 1
+            frame_plans[-1]["sweep_start_ms"] = sweep_start
+            hold_distance += (sweep_start - end) * 500 / points[-1].beat_length * points[-1].sv
+            previous = hold_distance
+            row_times[first] = {}
+            for i, row in enumerate(levels):
+                distance = (0.8 - (row + 0.5) * 0.6 / height) * time_range
+                if distance <= previous:
+                    raise ValueError("展示时间过长，图案会接近判定线；请缩短时间范围。")
+                points.append(stable_fast_point(sweep_start + i, distance - previous))
+                row_times[first][row] = sweep_start + i + 1
+                previous = distance
+            points.append(stable_fast_point(sweep_start + len(levels), 1.1 * time_range - previous))
+            return
         before, between, after = _stable_sweep_steps(time_range, height)
         before += duration - minimum
         # Place rows on the integer grid first; fit SV to their exact distances.
@@ -229,7 +274,7 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
 
     for index, (rows, (start, end), count) in enumerate(zip(frames, frame_times, counts)):
         frame = {"pattern": rows, "start_ms": start, "end_ms": end,
-                 "entry_start_ms": entry_start, "exit_end_ms": end + transition_ms}
+                 "entry_start_ms": entry_start, "exit_end_ms": end + transition_ms, "sweep_start_ms": end}
         frame_plans.append(frame)
         if index == note_frames[index]:
             hold_distance = 0
@@ -280,11 +325,11 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
     for index in range(len(frame_plans) - 2, -1, -1):
         if note_frames[index] == note_frames[index + 1]:
             frame_plans[index]["exit_end_ms"] = frame_plans[index + 1]["exit_end_ms"]
+            frame_plans[index]["sweep_start_ms"] = frame_plans[index + 1]["sweep_start_ms"]
     notes = []
     for index, frame in enumerate(frame_plans):
         first = note_frames[index]
-        if target_client == "stable":
-            frame["note_frame"] = first
+        frame["note_frame"] = first
         frame["entry_start_ms"] = frame_plans[first]["entry_start_ms"]
         drift = (timeline.position(frame["end_ms"]) - timeline.position(frame_plans[first]["start_ms"])) / time_range
         if drift >= 0.19:
@@ -294,21 +339,24 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
         if index != first:
             continue
         rows = frame["pattern"]
-        for row, line in enumerate(rows):
-            # Row centres occupy the middle 60%; row 0 is the TOP of the picture.
+        times = {}
+        for row in {r for _, top, bottom in _note_runs(rows, merge_holds) for r in (top, bottom)}:
+            # Row zero is at the top. Hold heads are the BOTTOM of a lit run,
+            # with their later tail timestamp at the top; never span dark gaps.
             y = 0.2 + (row + 0.5) * 0.6 / len(rows)
-            if target_client == "stable":
-                time = row_times[index][row]
-            else:
-                distance = timeline.position(frame["start_ms"]) + (1 - y) * time_range
-                time = timeline.time_at(distance)
-            for column, pixel in enumerate(line):
-                if pixel == "#":
-                    notes.append({"frame": index, "column": column, "row": row, "time_ms": time, "y": y})
+            times[row] = (row_times[index][row] if target_client == "stable" else
+                          timeline.time_at(timeline.position(frame["start_ms"]) + (1 - y) * time_range))
+        for column, top, bottom in _note_runs(rows, merge_holds):
+            note = {"frame": index, "column": column, "row": bottom, "time_ms": times[bottom],
+                    "y": 0.2 + (bottom + 0.5) * 0.6 / len(rows)}
+            if top != bottom:
+                note.update(end_row=top, end_time_ms=times[top], end_y=0.2 + (top + 0.5) * 0.6 / len(rows))
+            notes.append(note)
     if not notes:
         raise ValueError("所有帧均为空白，至少需要一个 #；视频需要包含亮部。")
     notes.sort(key=lambda n: (n["time_ms"], n["column"]))
-    base = most_common_beat_length(points, notes[-1]["time_ms"], target_client)
+    last_object_time = max(n.get("end_time_ms", n["time_ms"]) for n in notes)
+    base = most_common_beat_length(points, last_object_time, target_client)
     if not math.isclose(base, 500, abs_tol=1e-9):
         raise ValueError("该时间组合改变了参考 BPM；请增加 start 或缩短 transition。")
 
@@ -318,7 +366,7 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
         "start_ms": start_ms, "end_ms": end_ms,
         "transition_ms": transition_ms, "scroll_speed": scroll_speed,
         "requested_transition_ms": requested_transition, "fast_clear": fast_clear,
-        "timing_mode": timing_mode, "target_client": target_client,
+        "timing_mode": timing_mode, "target_client": target_client, "merge_holds": merge_holds,
         "time_range_ms": time_range, "base_beat_length_ms": base,
         "skin_assumption": ("lazer default skin, downscroll, no speed/column mods" if target_client == "lazer" else
                             "stable legacy baseline, fixed scroll speed, downscroll, no speed/column mods; experimental"),
@@ -350,7 +398,10 @@ def encode_osu(plan, audio_filename="silence.wav"):
     lines.extend(["", "[HitObjects]"])
     for note in plan["notes"]:
         x = int((note["column"] + 0.5) * 512 / plan["keys"])
-        lines.append(f"{x},192,{number(note['time_ms'])},1,0,0:0:0:0:")
+        if "end_time_ms" in note:
+            lines.append(f"{x},192,{number(note['time_ms'])},128,0,{number(note['end_time_ms'])}:0:0:0:0:")
+        else:
+            lines.append(f"{x},192,{number(note['time_ms'])},1,0,0:0:0:0:")
     return "\n".join(lines) + "\n"
 
 
@@ -364,7 +415,7 @@ body{font:16px system-ui;background:#121520;color:#edf0ff;max-width:880px;margin
 main{display:flex;gap:32px}canvas{background:#090c14;border:1px solid #434b67}
 input{width:100%}button{padding:8px 20px}pre{line-height:1.4;color:#80e0de}
 </style><h1>SV 图案位置预览</h1>
-<p>几何模型预览；不是 lazer 实机画面。速度设置、皮肤和判定会影响实际外观。</p>
+<p>几何模型预览；不是游戏实机画面。速度设置、皮肤和判定会影响实际外观。</p>
 <main><canvas id="view" width="360" height="768"></canvas><div>
 <pre id="pattern">""" + pattern + """</pre><p id="info"></p><button id="play">播放</button>
 <p><input id="seek" type="range" step="0.01"></p><output id="time"></output>
@@ -378,14 +429,18 @@ const speed=p=>plan.base_beat_length_ms/p.beat_length*p.sv;
 for(let i=1;i<points.length;i++)positions.push(positions[i-1]+(points[i].time-points[i-1].time)*speed(points[i-1]));
 function position(t){let i=points.length-1;while(i>0&&points[i].time>t)i--;return positions[i]+(t-points[i].time)*speed(points[i]);}
 const notePositions=plan.notes.map(n=>position(n.time_ms));
+const noteEndPositions=plan.notes.map(n=>position(n.end_time_ms??n.time_ms));
+const maxNoteSpan=notePositions.reduce((span,start,i)=>Math.max(span,noteEndPositions[i]-start),0);
 function lowerBound(a,x){let lo=0,hi=a.length;while(lo<hi){let m=(lo+hi)>>>1;if(a[m]<x)lo=m+1;else hi=m;}return lo;}
 seek.min=plan.start_ms-plan.transition_ms-40;seek.max=plan.end_ms+plan.transition_ms+40;seek.value=plan.start_ms;
 document.getElementById('info').textContent=`${plan.keys}K · ${plan.frames.length} 帧 · 滚速 ${plan.scroll_speed} · ${plan.start_ms}–${plan.end_ms} ms；单帧最大漂移约 ${plan.drift_at_658px.toFixed(4)} px（658 px 高度）。`;
 function draw(){let t=+seek.value,w=canvas.width/plan.keys;ctx.clearRect(0,0,360,768);
 ctx.strokeStyle='#293047';for(let c=1;c<plan.keys;c++){ctx.beginPath();ctx.moveTo(c*w,0);ctx.lineTo(c*w,768);ctx.stroke();}
-const current=position(t),lower=current+(1-772/658)*plan.time_range_ms,upper=current+(1+4/658)*plan.time_range_ms;
-ctx.fillStyle='#80e0de';for(let i=lowerBound(notePositions,lower);i<plan.notes.length&&notePositions[i]<=upper;i++){const n=plan.notes[i];let y=(1-(notePositions[i]-current)/plan.time_range_ms)*658;ctx.fillRect(n.column*w+2,y-4,w-4,8);}
-const index=plan.frames.findIndex((f,i)=>t>=f.start_ms&&(t<=f.end_ms||
+const current=position(t),lower=current+(1-772/658)*plan.time_range_ms-maxNoteSpan,upper=current+(1+4/658)*plan.time_range_ms;
+ctx.fillStyle='#80e0de';for(let i=lowerBound(notePositions,lower);i<plan.notes.length&&notePositions[i]<=upper;i++){
+const n=plan.notes[i],y=(1-(notePositions[i]-current)/plan.time_range_ms)*658,tailY=(1-(noteEndPositions[i]-current)/plan.time_range_ms)*658;
+if(y>=-4&&tailY<=772){const top=Math.max(0,tailY-4);ctx.fillRect(n.column*w+2,top,w-4,Math.min(768,y+4)-top);}}
+const index=plan.frames.findIndex((f,i)=>t>=f.start_ms&&(t<=Math.max(f.end_ms,f.sweep_start_ms??f.end_ms)||
     (i+1<plan.frames.length&&t<plan.frames[i+1].start_ms&&f.note_frame!==undefined&&f.note_frame===plan.frames[i+1].note_frame)));
 document.getElementById('pattern').textContent=index<0?'空档 / 进场 / 换帧 / 退场':plan.frames[index].pattern.join('\\n');
 ctx.fillStyle='white';ctx.fillRect(0,657,360,2);time.textContent=t.toFixed(2)+' ms'+(index<0?'':` · 第 ${index+1} 帧`);}
@@ -415,9 +470,27 @@ def write_output(plan, output, *, audio_data=None):
     (output / "preview.html").write_text(make_preview(plan), encoding="utf-8")
     video = plan.get("video", {})
     settings_path = output / "播放设置.txt"
-    if video.get("game_fps") is not None:
+    if video.get("refresh_hz") is not None:
         settings_path.write_text(
-            "osu!stable 普通 mania 短音符播放设置\n"
+            f"osu!{plan.get('target_client', 'lazer')} mania 刷新率排帧播放设置\n"
+            f"参考实际刷新率：{number(video['refresh_hz'])} Hz（不是整数游戏限帧值）\n"
+            f"视频采样帧率：{number(video['fps'])} FPS（请求 {number(video.get('requested_fps', video['fps']))} FPS）\n"
+            f"画面：{plan['keys']} 列 × {video['height']} 行（请求 {video.get('requested_height', video['height'])} 行）\n"
+            f"画面相位微调：{number(video.get('refresh_phase_ms', 0))} ms；音轨不移动。\n"
+            f"连续单键转长条：{'开启' if plan.get('merge_holds', False) else '关闭'}；不合并空格或不同画面。\n"
+            f"切帧预算：{number(plan['transition_ms'])} ms；最长有效快段："
+            f"{number(max(f['exit_end_ms'] - f['sweep_start_ms'] for f in plan['frames']))} ms。\n"
+            f"\n使用固定滚速 {number(plan['scroll_speed'])}、向下滚动与 NF；不要使用变速或改变列数的 Mod。\n"
+            "确认系统和游戏采用填写的实际刷新率；59.94 / 60000/1001 Hz 不等于 60 Hz。\n"
+            "可用 VSync 对齐显示刷新，但它不会把谱面／音频时钟锁到预设相位。\n"
+            "stable 请关闭 Scale osu!mania scroll speed with BPM。超过 9 列可能分成两个舞台。\n"
+            "长条外观受皮肤头、尾、身体贴图影响；预览仅验证位置，不模拟判定或 Miss 淡出。\n"
+            "转换器不会修改游戏或系统配置。未知相位、时钟抖动或刷新率不匹配仍可能采到切帧；\n"
+            "不能保证零残影。请按实际刷新率重新导入，必要时微调画面相位后实测。\n",
+            encoding="utf-8")
+    elif video.get("game_fps") is not None:
+        settings_path.write_text(
+            "osu!stable mania 旧版整数游戏 FPS 播放设置\n"
             f"目标游戏帧率：{video['game_fps']} FPS\n"
             f"视频采样帧率：{number(video['fps'])} FPS（请求 {number(video.get('requested_fps', video['fps']))} FPS）\n"
             f"画面：{plan['keys']} 列 × {video['height']} 行（请求 {video.get('requested_height', video['height'])} 行）\n"
@@ -440,7 +513,10 @@ def main():
     parser.add_argument("pattern", type=Path, help="文本图案；配合 --video 时为本地视频文件")
     parser.add_argument("--video", action="store_true", help="导入视频及音轨，自动使用极速清场")
     parser.add_argument("--fps", type=float, default=10, help="视频每秒帧数，可填小数，默认 10")
-    parser.add_argument("--game-fps", type=int, help="stable 目标游戏 FPS，60–999；自动对齐视频采样和行数")
+    parser.add_argument("--game-fps", type=int, help="旧版 stable 整数游戏 FPS 排帧；不能与 --refresh-hz 同用")
+    parser.add_argument("--refresh-hz", help="实际刷新率，支持 59.94 或 60000/1001；按整次刷新安排视频采样")
+    parser.add_argument("--refresh-phase-ms", type=float, default=0, help="画面相位微调，不移动音轨；须配合 --refresh-hz")
+    parser.add_argument("--merge-holds", action="store_true", help="同一帧同列连续亮格转长条，不跨空格")
     parser.add_argument("--width", type=int, default=10, help="视频列数：1–18，默认 10")
     parser.add_argument("--height", type=int, default=24, help="视频画面高度 / 行，1–128，默认 24")
     parser.add_argument("--target-client", choices=("lazer", "stable"), default="lazer", help="stable 为实验整数时间兼容")
@@ -457,6 +533,10 @@ def main():
     parser.add_argument("--output", type=Path, default=Path("output"), help="输出目录，同名生成文件会覆盖")
     args = parser.parse_args()
     try:
+        refresh_hz = float(Fraction(args.refresh_hz)) if args.refresh_hz is not None else None
+    except (ValueError, ZeroDivisionError):
+        parser.error("--refresh-hz 须为数字或分数，例如 59.94 或 60000/1001。")
+    try:
         if args.video:
             if args.end_ms is not None:
                 raise ValueError("视频结束时间自动计算，请不要传 --end-ms。")
@@ -464,17 +544,22 @@ def main():
             result = import_video(args.pattern, fps=args.fps, width=args.width, height=args.height,
                                   start_ms=args.start_ms, scroll_speed=args.scroll_speed, target_client=args.target_client,
                                   threshold=args.threshold, brightness=args.brightness, contrast=args.contrast,
-                                  invert=args.invert, fit=args.fit, game_fps=args.game_fps)
+                                  invert=args.invert, fit=args.fit, game_fps=args.game_fps,
+                                  refresh_hz=refresh_hz, refresh_phase_ms=args.refresh_phase_ms,
+                                  merge_holds=args.merge_holds)
             plan = result["plan"]
             write_output(plan, args.output, audio_data=result["audio"])
         else:
             if args.game_fps is not None:
                 raise ValueError("--game-fps 仅可用于 stable 视频导入。")
+            if refresh_hz is not None or args.refresh_phase_ms:
+                raise ValueError("--refresh-hz 和 --refresh-phase-ms 仅可用于视频导入。")
             if args.end_ms is None:
                 raise ValueError("文本图案需要 --end-ms。")
             frames = parse_frames(args.pattern.read_text(encoding="utf-8-sig"))
             plan = compile_frames(frames, args.start_ms, args.end_ms, args.scroll_speed, args.transition_ms,
-                                  fast_clear=args.fast_clear, target_client=args.target_client)
+                                  fast_clear=args.fast_clear, target_client=args.target_client,
+                                  merge_holds=args.merge_holds)
             write_output(plan, args.output)
     except (ValueError, OSError) as error:
         parser.error(str(error))

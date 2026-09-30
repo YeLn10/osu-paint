@@ -118,7 +118,7 @@ class DesktopVideoTests(unittest.TestCase):
         self.assertEqual(importer.call_args.kwargs["target_client"], "stable")
         self.assertNotIn("reference_animation", importer.call_args.kwargs)
 
-    def test_game_fps_options_show_actual_quality_and_pass_original_requests(self):
+    def test_refresh_options_show_actual_quality_and_pass_original_requests(self):
         self.open_video_dialog()
         self.app.video_target.set("stable")
         self.assertTrue(self.app.video_game_sync.get())
@@ -126,11 +126,14 @@ class DesktopVideoTests(unittest.TestCase):
         for key, value in dict(fps="17", width="18", height="24").items():
             self.app.video_fields[key].set(value)
         effective = resolve_video_options(fps=17, width=18, height=24, start_ms=2000,
-                                          scroll_speed=27, target_client="stable", game_fps=60)
+                                          scroll_speed=27, target_client="stable", refresh_hz=60)
         self.assertIn(f"18 × {effective['height']} 行", self.app.video_effective_label.get())
         self.assertIn(f"{effective['fps']:g} FPS", self.app.video_effective_label.get())
         self.assertIn("请求 18 × 24 行 · 17 FPS", self.app.video_effective_label.get())
-        self.assertIn("需要游戏限帧和刷新对齐", self.app.video_effective_label.get())
+        self.assertIn("参考 60 Hz", self.app.video_effective_label.get())
+        self.assertIn("未知相位不能保证零残影", self.app.video_effective_label.get())
+        self.app.video_merge_holds.set(True)
+        self.app.video_refresh_phase.set("1.5")
         self.assertEqual(self.app.video_fields["height"].get(), "24")
         self.assertEqual(self.app.video_fields["fps"].get(), "17")
         preview = {"frame": [".#", "#."], "source_ppm": b"P6\n1 1\n255\n\xff\xff\xff",
@@ -142,10 +145,13 @@ class DesktopVideoTests(unittest.TestCase):
             self.app.video_start_button.invoke()
             self.wait_for(lambda: not self.app.importing)
         for call in (reader.call_args, importer.call_args):
-            self.assertEqual({key: call.kwargs[key] for key in ("fps", "width", "height", "game_fps")},
-                             dict(fps=17, width=18, height=24, game_fps=60))
+            self.assertEqual({key: call.kwargs[key] for key in ("fps", "width", "height", "refresh_hz")},
+                             dict(fps=17, width=18, height=24, refresh_hz=60))
+            self.assertTrue(call.kwargs["merge_holds"])
+            self.assertEqual(call.kwargs["refresh_phase_ms"], 1.5)
+            self.assertNotIn("game_fps", call.kwargs)
 
-    def test_lazer_does_not_send_game_fps_and_invalid_limit_prevents_import(self):
+    def test_fractional_refresh_works_on_lazer_and_invalid_limits_prevent_import(self):
         self.open_video_dialog()
         self.app.video_target.set("stable")
         self.app.video_game_fps.set("999")
@@ -156,12 +162,49 @@ class DesktopVideoTests(unittest.TestCase):
         report.assert_called_once()
         importer.assert_not_called()
         self.app.video_target.set("lazer")
-        self.assertFalse(self.app.video_game_sync.get())
-        self.app.video_game_sync.set(True)
+        self.assertTrue(self.app.video_game_sync.get())
+        self.app.video_game_fps.set("60000/1001")
         with patch("osu_paint_desktop.read_video", return_value=video_result()) as importer:
             self.app.video_start_button.invoke()
             self.wait_for(lambda: not self.app.importing)
         self.assertNotIn("game_fps", importer.call_args.kwargs)
+        self.assertAlmostEqual(importer.call_args.kwargs["refresh_hz"], 60000 / 1001)
+
+    def test_disabling_refresh_ignores_unused_invalid_rate_and_phase(self):
+        self.open_video_dialog()
+        self.app.video_game_fps.set("60/0")
+        self.app.video_refresh_phase.set("invalid")
+        self.assertIn("参数无效", self.app.video_effective_label.get())
+        self.app.video_game_sync.set(False)
+        self.assertNotIn("参数无效", self.app.video_effective_label.get())
+        with patch("osu_paint_desktop.read_video", return_value=video_result()) as importer:
+            self.app.video_start_button.invoke()
+            self.wait_for(lambda: not self.app.importing)
+        self.assertNotIn("refresh_hz", importer.call_args.kwargs)
+        self.assertNotIn("refresh_phase_ms", importer.call_args.kwargs)
+
+    def test_refresh_and_hold_metadata_round_trip_without_moving_audio(self):
+        frames = [["#."] * 3, [".#"] * 3]
+        plan = compile_frames(frames, frame_times=[(2005, 2240), (2244, 2505)], fast_clear=True,
+                              target_client="stable", merge_holds=True, anchor_reference=True)
+        video = dict(filename="refresh.mp4", fps=4, width=2, height=3, start_ms=2000,
+                     duration_ms=500, refresh_hz=60, refresh_phase_ms=5, requested_fps=4,
+                     requested_height=3)
+        plan["video"] = video.copy()
+        self.app._apply_video(dict(plan=plan, video=video, audio=b"OggS test audio"))
+        saved = json.loads(json.dumps(self.app._project_data()))
+        self.app.load_project(saved)
+        self.app._refresh_preview()
+        self.assertEqual(self.app.plan, plan)
+        self.assertEqual(self.app._project_data(), saved)
+        self.assertTrue(self.app.merge_holds.get())
+        self.assertEqual(self.app.audio_data, b"OggS test audio")
+        self.assertEqual(self.app.video["start_ms"], 2000)
+        self.assertIn("参考 60 Hz / 相位 5 ms", self.app.status.get())
+        self.app.fields["scroll_speed"].set("28")
+        self.assertNotIn("refresh_hz", self.app.video)
+        self.assertNotIn("refresh_phase_ms", self.app.video)
+        self.assertEqual(self.app.audio_data, b"OggS test audio")
 
     def test_game_fps_metadata_reopens_with_audio_and_actual_dimensions(self):
         result = optimized_video_result()

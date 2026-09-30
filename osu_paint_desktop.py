@@ -1,6 +1,7 @@
 """Native desktop editor for the existing osu!mania pattern compiler."""
 
 from bisect import bisect_left, bisect_right
+from fractions import Fraction
 from pathlib import Path
 import base64
 import math
@@ -147,7 +148,7 @@ class PaintApp:
                      state="readonly", width=9).pack(side="left")
         self.fast_clear = tk.BooleanVar(value=True)
         ttk.Checkbutton(timing_bar, text="极速清场", variable=self.fast_clear,
-                        command=self._timing_options_changed).pack(side="left", padx=8)
+                        command=lambda: (self._clear_video_alignment(), self._timing_options_changed())).pack(side="left", padx=8)
         ttk.Button(timing_bar, text="参数说明", command=self.explain_timing).pack(side="right")
         self.target_client = tk.StringVar(value="lazer")
         ttk.Combobox(timing_bar, textvariable=self.target_client, values=("lazer", "stable"),
@@ -173,6 +174,9 @@ class PaintApp:
             variable.trace_add("write", lambda *args, field=key: self._parameter_changed(field))
         self.entries["transition_ms"].configure(state="disabled")
         self.timing_mode.trace_add("write", self._mode_changed)
+        self.merge_holds = tk.BooleanVar(value=False)
+        ttk.Checkbutton(left, text="连续单键转长条（同列相邻亮格，不跨空格 / 帧）", variable=self.merge_holds,
+                        command=self._changed).grid(row=8, column=0, sticky="w", pady=(8, 0))
 
         right = ttk.Frame(body)
         right.grid(row=0, column=1, sticky="nsew")
@@ -224,31 +228,32 @@ class PaintApp:
     def _parameter_changed(self, key):
         if self.syncing_fields:
             return
-        alignment_removed = key == "target_client" and self.target_client.get() == "lazer" and self._clear_video_alignment()
+        alignment_removed = self._clear_video_alignment()
         if key in ("start_ms", "end_ms"):
             values = self.frame_times[self.selected] if self.timing_mode.get() == "自由模式" else self.uniform_times
             values[0 if key == "start_ms" else 1] = self.fields[key].get()
         self._changed()
         if alignment_removed:
             self._refresh_preview()
-            notice = "已撤销游戏帧率切帧设置；需重新导入视频才能重新对齐。"
+            notice = "已撤销刷新率／游戏帧率切帧设置；需重新导入视频才能重新对齐。"
             self._status(notice if self.plan is not None else f"{self.status.get()} {notice}", error=self.plan is None)
 
     def _clear_video_alignment(self):
-        if self.video is None or self.video.get("game_fps") is None:
+        if self.video is None or not any(self.video.get(key) is not None for key in ("game_fps", "refresh_hz")):
             return False
         self.video = {key: value for key, value in self.video.items()
-                      if key not in ("game_fps", "frame_fps", "requested_fps", "requested_height")}
+                      if key not in ("game_fps", "frame_fps", "refresh_hz", "refresh_phase_ms", "requested_fps", "requested_height")}
         return True
 
     def _mode_changed(self, *args):
         if self.syncing_fields:
             return
+        self._clear_video_alignment()
         if self.timing_mode.get() == "自由模式" and not self.free_times_initialized:
             try:
                 plan = compile_frames(self.frames, *map(float, self.uniform_times),
                                       float(self.fields["scroll_speed"].get()), float(self.fields["transition_ms"].get()),
-                                      fast_clear=self.fast_clear.get(), target_client=self.target_client.get())
+                                      fast_clear=self.fast_clear.get(), target_client=self.target_client.get(), merge_holds=self.merge_holds.get())
             except ValueError:
                 pass
             else:
@@ -267,10 +272,11 @@ class PaintApp:
                             "自由模式：选中一帧，填写本帧开始、结束时间。允许留空档，不能重叠；间隔须足够切帧。\n\n"
                             "切帧时长：推进图案所需的时间。越短移动越快，越长越容易看到下落。远离的两帧分别退场、进场。\n"
                             "极速清场：自动用合法最高速度计算时长，覆盖手动切帧值；滚速 27 时约 0.575 ms。不能保证零过渡画面。\n\n"
-                            "stable：整数毫秒音符，各行先排整数时间，再计算分段滚速。连续相同画面复用音符。\n"
+                            "stable：整数毫秒音符，各行先排整数时间，再计算分段滚速。两种客户端均复用连续相同画面。\n"
                             "stable 使用分段滚速；默认滚速下 24 行切帧为 25 ms，可使用 10 FPS。仍有滚动切换。\n"
-                            "按游戏帧率安排切帧：按指定渲染 FPS 调整切帧位置，必要时降低行数或采样 FPS；导入前会显示实际参数。\n"
-                            "需要在游戏中限帧并对齐刷新；播放时预览仍按真实时间绘制。\n\n"
+                            "刷新率排帧：填写实际 Hz（支持 59.94、60000/1001），按整次刷新安排采样，避免取整时钟的长期错位。\n"
+                            "VSync 可同步显示刷新，但不会把谱面时钟锁相；相位微调只移动画面，不移动音轨。仍不能保证零残影。\n"
+                            "连续单键转长条：同一帧同列的连续亮格合并，不跨空格。stable 极速模式只为头尾保留整数时间，缩短有效下落。\n\n"
                             "游戏滚速：必须与游戏设置一致。它决定时间距离如何换算成舞台位置，不是动画帧率；"
                             "更改后会重新计算音符与变速点，不会改变你填写的展示时间。\n\n"
                             "保存为 JSON 项目可保留全部时间与参数；TXT 仅保存图案。",
@@ -433,7 +439,8 @@ class PaintApp:
         settings["start_ms"], settings["end_ms"] = self.uniform_times
         data = {"format": "osu-paint", "version": 1, "frames": self.frames,
                 "frame_times": self.frame_times, "timing_mode": self.timing_mode.get(),
-                "settings": settings, "fast_clear": self.fast_clear.get(), "target_client": self.target_client.get()}
+                "settings": settings, "fast_clear": self.fast_clear.get(), "target_client": self.target_client.get(),
+                "merge_holds": self.merge_holds.get()}
         if self.video is not None:
             data.update(version=2, video=self.video.copy(),
                         audio=base64.b64encode(self.audio_data).decode("ascii") if self.audio_data is not None else None)
@@ -445,6 +452,9 @@ class PaintApp:
                 raise ValueError("不支持的项目版本。")
             video, audio = None, None
             target_client = data.get("target_client", "lazer")
+            merge_holds = data.get("merge_holds", False)
+            if not isinstance(merge_holds, bool):
+                raise ValueError("项目中的长条开关无效。")
             if target_client not in ("lazer", "stable"):
                 raise ValueError("项目中的目标客户端无效。")
             if data["version"] == 2:
@@ -455,8 +465,10 @@ class PaintApp:
                     raise ValueError("此项目使用已撤销的参考动画模式，请从原视频重新导入。")
                 effective = resolve_video_options(fps=video["fps"], width=video["width"], height=video["height"],
                                                   start_ms=video["start_ms"], scroll_speed=float(data["settings"]["scroll_speed"]),
-                                                  target_client=target_client, game_fps=video.get("game_fps"))
-                if video.get("game_fps") is not None and (
+                                                  target_client=target_client, game_fps=video.get("game_fps"),
+                                                  refresh_hz=video.get("refresh_hz"), refresh_phase_ms=video.get("refresh_phase_ms", 0),
+                                                  merge_holds=merge_holds)
+                if any(video.get(key) is not None for key in ("game_fps", "refresh_hz")) and (
                         effective["height"] != video["height"] or not math.isclose(effective["fps"], video["fps"], abs_tol=1e-9)):
                     raise ValueError("项目中的游戏帧率优化参数与实际画面不一致，请从原视频重新导入。")
                 if not math.isfinite(video["duration_ms"]) or video["duration_ms"] <= 0:
@@ -466,7 +478,7 @@ class PaintApp:
                     if not audio.startswith(b"OggS"):
                         raise ValueError("项目中的音轨无效。")
                 video = video.copy()
-            frames = parse_frames("\n---\n".join("\n".join(frame) for frame in data["frames"]), allow_empty=video is not None)
+            frames = parse_frames("\n---\n".join("\n".join(frame) for frame in data["frames"]), allow_empty=True)
             if video is not None and (len(frames[0]), len(frames[0][0])) != (video["height"], video["width"]):
                 raise ValueError("视频分辨率与项目画面不一致。")
             windows = data["frame_times"]
@@ -487,6 +499,7 @@ class PaintApp:
         self.target_client.set(target_client)
         self.timing_mode.set(mode)
         self.fast_clear.set(data["fast_clear"])
+        self.merge_holds.set(merge_holds)
         for key, value in settings.items():
             self.fields[key].set(value)
         self._show_time_fields()
@@ -512,11 +525,6 @@ class PaintApp:
         self._update_editor()
 
     def save_pattern(self):
-        try:
-            parse_frames(self._text(), allow_empty=self.video is not None)
-        except ValueError as error:
-            messagebox.showerror("图案还不能保存", str(error), parent=self.root)
-            return
         filename = filedialog.asksaveasfilename(parent=self.root, title="保存项目（JSON 保留时间参数）",
                                               defaultextension=".json",
                                               filetypes=[("osu-paint 项目", "*.json"), ("仅文本图案", "*.txt")])
@@ -524,14 +532,17 @@ class PaintApp:
             return
         try:
             text_only = Path(filename).suffix.lower() == ".txt"
+            # A project can be saved before its empty frames are ready to export.
+            parse_frames(self._text(), allow_empty=not text_only or self.video is not None)
             content = self._text() if text_only else json.dumps(self._project_data(), ensure_ascii=False, indent=2)
             Path(filename).write_text(content, encoding="utf-8")
-        except OSError as error:
+        except (OSError, ValueError) as error:
             messagebox.showerror("保存失败", str(error), parent=self.root)
             return
-        self.dirty = text_only and (self.timing_mode.get() == "自由模式" or self.video is not None)
+        if not text_only:
+            self.dirty = False
         self._update_editor()
-        self._status(f"图案已保存：{filename}（TXT 不保存音轨与时间参数，请用 JSON 保存项目）" if text_only
+        self._status(f"图案已保存：{filename}（TXT 不保存音轨与时间参数；项目修改仍需保存为 JSON）" if text_only
                      else f"项目已保存：{filename}（包含各帧时间、参数及已导入的音轨）")
 
     def import_video(self):
@@ -581,8 +592,12 @@ class PaintApp:
             inputs.append(entry)
         self.video_invert = tk.BooleanVar(value=False)
         invert = ttk.Checkbutton(panel, text="亮暗反转", variable=self.video_invert)
-        invert.grid(row=8, column=0, columnspan=2, sticky="w", pady=5)
+        invert.grid(row=8, column=0, sticky="w", pady=5)
         inputs.append(invert)
+        self.video_merge_holds = tk.BooleanVar(value=self.merge_holds.get())
+        hold_option = ttk.Checkbutton(panel, text="连续单键转长条", variable=self.video_merge_holds)
+        hold_option.grid(row=8, column=1, sticky="w", pady=5)
+        inputs.append(hold_option)
         self.video_fit = tk.StringVar(value="拉伸")
         self.video_target = tk.StringVar(value=self.target_client.get())
         for row, label, variable, choices in [(9, "缩放方式", self.video_fit, ("拉伸", "等比留边", "等比裁剪")),
@@ -592,27 +607,32 @@ class PaintApp:
             combo.grid(row=row, column=1, pady=5)
             inputs.append(combo)
         self.video_game_fps = tk.StringVar(value="60")
-        ttk.Label(panel, text="游戏渲染 FPS（60–999）", style="Muted.TLabel").grid(row=11, column=0, sticky="w")
-        game_entry = ttk.Spinbox(panel, textvariable=self.video_game_fps, from_=60, to=999, width=12)
+        ttk.Label(panel, text="实际刷新率 / Hz（如 59.94、60000/1001）", style="Muted.TLabel").grid(row=11, column=0, sticky="w")
+        game_entry = ttk.Spinbox(panel, textvariable=self.video_game_fps, from_=20, to=1000, width=12)
         game_entry.grid(row=11, column=1, pady=5)
         inputs.append(game_entry)
-        self.video_game_sync = tk.BooleanVar(value=self.video_target.get() == "stable")
-        game_sync = ttk.Checkbutton(panel, text="按游戏帧率安排切帧（必要时降低行数）", variable=self.video_game_sync)
+        self.video_game_sync = tk.BooleanVar(value=True)
+        game_sync = ttk.Checkbutton(panel, text="按实际刷新率排帧（stable 必要时降低行数）", variable=self.video_game_sync)
         game_sync.grid(row=12, column=0, columnspan=2, sticky="w", pady=5)
         inputs.append(game_sync)
+        self.video_refresh_phase = tk.StringVar(value="0")
+        ttk.Label(panel, text="画面相位微调 / ms（音轨不移动）", style="Muted.TLabel").grid(row=13, column=0, sticky="w")
+        phase_entry = ttk.Entry(panel, textvariable=self.video_refresh_phase, width=12)
+        phase_entry.grid(row=13, column=1, pady=5)
+        inputs.append(phase_entry)
         self.video_effective_label = tk.StringVar()
         ttk.Label(panel, textvariable=self.video_effective_label, wraplength=480, style="Muted.TLabel").grid(
-            row=13, column=0, columnspan=2, sticky="w", pady=5)
+            row=14, column=0, columnspan=2, sticky="w", pady=5)
         self.video_frame_index = tk.StringVar(value="1")
-        ttk.Label(panel, text="预览帧序号 / 从 1 开始", style="Muted.TLabel").grid(row=14, column=0, sticky="w", pady=(12, 0))
+        ttk.Label(panel, text="预览帧序号 / 从 1 开始", style="Muted.TLabel").grid(row=15, column=0, sticky="w", pady=(12, 0))
         frame_entry = ttk.Entry(panel, textvariable=self.video_frame_index, width=12)
-        frame_entry.grid(row=14, column=1, pady=(12, 0))
+        frame_entry.grid(row=15, column=1, pady=(12, 0))
         inputs.append(frame_entry)
         self.import_status = tk.StringVar(value="导入会替换当前画布；失败或取消时保留原项目。")
         ttk.Label(panel, textvariable=self.import_status, wraplength=480, style="Muted.TLabel").grid(
-            row=15, column=0, columnspan=2, sticky="w", pady=8)
+            row=16, column=0, columnspan=2, sticky="w", pady=8)
         buttons = ttk.Frame(panel)
-        buttons.grid(row=16, column=0, columnspan=2, sticky="e", pady=(8, 0))
+        buttons.grid(row=17, column=0, columnspan=2, sticky="e", pady=(8, 0))
 
         def request_options():
             options = {key: (int(variable.get()) if key in ("width", "height") else float(variable.get()))
@@ -620,15 +640,19 @@ class PaintApp:
             options["scroll_speed"] = float(self.fields["scroll_speed"].get())
             options.update(invert=self.video_invert.get(),
                            fit={"拉伸": "stretch", "等比留边": "contain", "等比裁剪": "cover"}[self.video_fit.get()],
-                           target_client=self.video_target.get())
-            if self.video_target.get() == "stable" and self.video_game_sync.get():
-                options["game_fps"] = int(self.video_game_fps.get())
+                           target_client=self.video_target.get(), merge_holds=self.video_merge_holds.get())
+            if self.video_game_sync.get():
+                try:
+                    options["refresh_hz"] = float(Fraction(self.video_game_fps.get()))
+                except (ValueError, ZeroDivisionError):
+                    raise ValueError("刷新率须为数字或分数，例如 59.94 或 60000/1001。") from None
+                options["refresh_phase_ms"] = float(self.video_refresh_phase.get())
             return options
 
         def option_controls():
-            stable = self.video_target.get() == "stable"
-            game_sync.configure(state="normal" if stable else "disabled")
-            game_entry.configure(state="normal" if stable and self.video_game_sync.get() else "disabled")
+            state = "normal" if self.video_game_sync.get() else "disabled"
+            game_entry.configure(state=state)
+            phase_entry.configure(state=state)
 
         def describe_options(*args):
             self.video_preview_label.set("参数或帧已修改，请点击预览刷新。")
@@ -642,18 +666,14 @@ class PaintApp:
                 self.video_effective_label.set(f"参数无效：{error}")
                 return
             text = f"实际导入：{effective['width']} × {effective['height']} 行 · {number(effective['fps'])} FPS"
-            if "game_fps" in requested:
+            if "refresh_hz" in requested:
                 text += (f"（请求 {requested['width']} × {requested['height']} 行 · {number(requested['fps'])} FPS）\n"
-                         f"游戏 {requested['game_fps']} FPS；需要游戏限帧和刷新对齐。")
+                         f"参考 {number(requested['refresh_hz'])} Hz；请匹配实际刷新率，未知相位不能保证零残影。")
             self.video_effective_label.set(text)
 
-        def target_changed(*args):
-            self.video_game_sync.set(self.video_target.get() == "stable")
-
         for variable in [*self.video_fields.values(), self.video_invert, self.video_fit, self.video_frame_index,
-                         self.video_target, self.video_game_fps, self.video_game_sync]:
+                         self.video_target, self.video_game_fps, self.video_game_sync, self.video_refresh_phase, self.video_merge_holds]:
             variable.trace_add("write", describe_options)
-        self.video_target.trace_add("write", target_changed)
         self.video_option_controls = option_controls
 
         def cancel():
@@ -721,6 +741,7 @@ class PaintApp:
         self.target_client.set(plan.get("target_client", "lazer"))
         self.timing_mode.set("自由模式")
         self.fast_clear.set(True)
+        self.merge_holds.set(plan.get("merge_holds", False))
         self.fields["scroll_speed"].set(number(plan["scroll_speed"]))
         self._show_time_fields()
         self.entries["transition_ms"].configure(state="disabled")
@@ -849,7 +870,7 @@ class PaintApp:
                         raise ValueError("每一帧的开始和结束时间都必须填写数字。") from None
                 self.plan = compile_frames(self.frames, **values, frame_times=windows, fast_clear=self.fast_clear.get(),
                                             allow_empty_frames=self.video is not None, anchor_reference=self.video is not None,
-                                            target_client=self.target_client.get())
+                                            target_client=self.target_client.get(), merge_holds=self.merge_holds.get())
             if self.video is not None:
                 self.plan["video"] = self.video.copy()
         except ValueError as error:
@@ -858,6 +879,9 @@ class PaintApp:
         if self.plan is not None:
             self.timeline = Timeline([Point(**point) for point in self.plan["points"]])
             self.note_distances = [self.timeline.position(note["time_ms"]) for note in self.plan["notes"]]
+            self.note_end_distances = [self.timeline.position(note.get("end_time_ms", note["time_ms"]))
+                                       for note in self.plan["notes"]]
+            self.max_note_span = max(end - start for start, end in zip(self.note_distances, self.note_end_distances))
             self.frame_starts = [frame["start_ms"] for frame in self.plan["frames"]]
             self.seek_min = max(0, self.plan["start_ms"] - self.plan["transition_ms"] - 180)
             self.seek_max = self.plan["end_ms"] + self.plan["transition_ms"] + 180
@@ -869,7 +893,9 @@ class PaintApp:
                          + (" · 已带视频音轨" if self.audio_data is not None else "")
                          + (f" · {number(self.video['fps'])} FPS / {self.video['height']} 行 · "
                             f"游戏 {self.video['game_fps']} FPS；需要游戏限帧和刷新对齐"
-                            if self.video is not None and self.video.get("game_fps") is not None else ""))
+                            if self.video is not None and self.video.get("game_fps") is not None else "")
+                         + (f" · 参考 {number(self.video['refresh_hz'])} Hz / 相位 {number(self.video.get('refresh_phase_ms', 0))} ms"
+                            if self.video is not None and self.video.get("refresh_hz") is not None else ""))
         state = "normal" if self.plan is not None else "disabled"
         self.play_button.configure(state=state)
         self.seek.configure(state=state)
@@ -895,21 +921,23 @@ class PaintApp:
             self.preview.create_rectangle(left + col * lane, top, left + (col + 1) * lane, top + full_h,
                                           fill="#141c2b" if col % 2 == 0 else "#101725", outline="#253044")
             self.preview.create_text(left + (col + 0.5) * lane, top + full_h + 13 * self.scale, text=str(col + 1), fill=MUTED, font=("Segoe UI", 9))
-        first = bisect_left(self.note_distances, position + (1 - (full_h + note_half) / stage_h) * self.plan["time_range_ms"])
+        first = bisect_left(self.note_distances, position + (1 - (full_h + note_half) / stage_h) * self.plan["time_range_ms"] - self.max_note_span)
         last = bisect_right(self.note_distances, position + (1 + note_half / stage_h) * self.plan["time_range_ms"])
         for index in range(first, last):
             note, distance = self.plan["notes"][index], self.note_distances[index]
             y = (1 - (distance - position) / self.plan["time_range_ms"]) * stage_h
-            # Keep drawing below judgement until physically off stage. Miss fades aren't simulated.
-            if -note_half <= y <= full_h + note_half:
+            tail_y = (1 - (self.note_end_distances[index] - position) / self.plan["time_range_ms"]) * stage_h
+            # Keep drawing the body below judgement until the tail is off stage.
+            if y >= -note_half and tail_y <= full_h + note_half:
                 x = left + note["column"] * lane
-                self.preview.create_rectangle(x + 2 * self.scale, max(top, top + y - note_half), x + lane - 2 * self.scale,
+                self.preview.create_rectangle(x + 2 * self.scale, max(top, top + tail_y - note_half), x + lane - 2 * self.scale,
                                               min(top + full_h, top + y + note_half),
-                                              fill=ACCENT if note["column"] % 2 == 0 else MINT, outline="", tags="note")
+                                              fill=ACCENT if note["column"] % 2 == 0 else MINT, outline="",
+                                              tags=("note", "hold") if "end_time_ms" in note else "note")
         self.preview.create_line(left, top + stage_h, left + stage_w, top + stage_h, fill=INK, width=2)
         index = bisect_right(self.frame_starts, current) - 1
         frames = self.plan["frames"]
-        holding = index >= 0 and (current <= frames[index]["end_ms"] or
+        holding = index >= 0 and (current <= max(frames[index]["end_ms"], frames[index]["sweep_start_ms"]) or
                                   (index + 1 < len(frames) and
                                    frames[index].get("note_frame", index) == frames[index + 1].get("note_frame", index + 1)))
         frame = index + 1 if holding else None

@@ -193,6 +193,25 @@ class VideoImportTests(unittest.TestCase):
         self.assertEqual(set(original["video"]), {"filename", "fps", "width", "height", "start_ms", "duration_ms",
                                                 "threshold", "brightness", "contrast", "invert", "fit"})
 
+    def test_fractional_refresh_phase_and_holds_share_real_preview_and_preserve_audio(self):
+        for client in ("stable", "lazer"):
+            with self.subTest(client=client):
+                options = dict(fps=20, width=2, height=4, target_client=client, refresh_hz=60000 / 1001,
+                               merge_holds=True)
+                base = self.load(**options)
+                shifted = self.load(**options, refresh_phase_ms=5)
+                # Ogg stream serials/CRCs vary across encodes; compare the decoded signal.
+                pcm_args = ["-i", "pipe:0", "-ac", "1", "-ar", "48000", "-f", "f32le", "pipe:1"]
+                self.assertEqual(self.ffmpeg(pcm_args, input=shifted["audio"]),
+                                 self.ffmpeg(pcm_args, input=base["audio"]))
+                self.assertEqual(shifted["video"]["start_ms"], 2000)
+                for before, after in zip(base["plan"]["frames"], shifted["plan"]["frames"]):
+                    self.assertAlmostEqual(after["start_ms"] - before["start_ms"], 5)
+                preview = preview_video_frame(self.source, **options, refresh_phase_ms=5, frame_index=10)
+                self.assertEqual(preview["frame"], shifted["plan"]["frames"][10]["pattern"])
+                self.assertTrue(any("end_time_ms" in n for n in shifted["plan"]["notes"]))
+                self.assertTrue(shifted["audio"].startswith(b"OggS"))
+
     def test_fractional_game_start_is_ready_at_the_first_nominal_refresh_and_keeps_audio_delay(self):
         result = self.load(fps=60, width=2, height=24, start_ms=2000.6, target_client="stable", game_fps=60)
         plan = result["plan"]

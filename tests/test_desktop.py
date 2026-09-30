@@ -34,6 +34,39 @@ class DesktopTests(unittest.TestCase):
             time.sleep(0.01)
         self.assertFalse(self.app.exporting, "Export did not finish")
 
+    def test_hold_option_round_trips_and_old_projects_default_to_singles(self):
+        self.app.merge_holds.set(True)
+        self.app._changed()
+        self.app._refresh_preview()
+        self.assertTrue(self.app.plan["merge_holds"])
+        self.assertTrue(any("end_time_ms" in note for note in self.app.plan["notes"]))
+        saved = json.loads(json.dumps(self.app._project_data()))
+        self.app.merge_holds.set(False)
+        self.app.load_project(saved)
+        self.app._refresh_preview()
+        self.assertTrue(self.app.merge_holds.get())
+        self.assertEqual(self.app._project_data(), saved)
+        del saved["merge_holds"]
+        self.app.load_project(saved)
+        self.app._refresh_preview()
+        self.assertFalse(self.app.merge_holds.get())
+        self.assertFalse(any("end_time_ms" in note for note in self.app.plan["notes"]))
+
+    def test_hold_preview_keeps_visible_tail_after_head_leaves_stage(self):
+        self.app.load_text("#\n#\n#\n#\n")
+        self.app.merge_holds.set(True)
+        self.app._refresh_preview()
+        self.root.deiconify()
+        self.root.update()
+        hold = self.app.plan["notes"][0]
+        target = self.app.timeline.position(hold["time_ms"]) + 0.3 * self.app.plan["time_range_ms"]
+        self.app.seek_time.set(self.app.timeline.time_at(target))
+        self.app._draw_preview()
+        items = self.app.preview.find_withtag("hold")
+        self.assertEqual(len(items), 1)
+        x1, y1, x2, y2 = self.app.preview.coords(items[0])
+        self.assertGreater(y2 - y1, 20)
+
     def test_initial_preview_reuses_compiler(self):
         self.assertEqual(self.app.plan, compile_frames([HEART], 2000, 4000, fast_clear=True))
         self.assertFalse(self.app.dirty)
@@ -189,6 +222,42 @@ class DesktopTests(unittest.TestCase):
         self.app._refresh_preview()
         self.assertEqual(len(self.app.plan["frames"]), 2)
 
+    def test_unfinished_blank_frames_save_and_reopen_as_json(self):
+        self.app.add_frame()
+        self.app.fields["end_ms"].set("6000")
+        expected = self.app._project_data()
+        with tempfile.TemporaryDirectory() as directory:
+            filename = Path(directory) / "未完成.json"
+            with patch("osu_paint_desktop.filedialog.asksaveasfilename", return_value=str(filename)), \
+                    patch("osu_paint_desktop.messagebox.showerror") as error:
+                self.app.save_pattern()
+            error.assert_not_called()
+            self.assertFalse(self.app.dirty)
+            self.app.frames = [HEART.copy()]
+            with patch("osu_paint_desktop.filedialog.askopenfilename", return_value=str(filename)):
+                self.app.open_pattern()
+            self.assertEqual(self.app._project_data(), expected)
+            self.app._refresh_preview()
+            self.assertIsNone(self.app.plan)
+            self.assertEqual(str(self.app.export_button["state"]), "disabled")
+            self.app.frames[1][0] = "#......"
+            self.app._changed()
+            self.app._refresh_preview()
+            self.assertIsNotNone(self.app.plan)
+
+    def test_text_save_keeps_unsaved_uniform_settings_and_close_guard(self):
+        self.app.fields["end_ms"].set("6000")
+        with tempfile.TemporaryDirectory() as directory:
+            filename = Path(directory) / "图案.txt"
+            with patch("osu_paint_desktop.filedialog.asksaveasfilename", return_value=str(filename)):
+                self.app.save_pattern()
+            self.assertTrue(filename.exists())
+            self.assertTrue(self.app.dirty)
+            with patch("osu_paint_desktop.messagebox.askyesno", return_value=False) as confirm:
+                self.app.close()
+            confirm.assert_called_once()
+            self.assertTrue(self.root.winfo_exists())
+
     def test_text_round_trip_and_invalid_input_preserves_drawing(self):
         text = "#.\n.#\n---\n.#\n#.\n"
         self.app.load_text(text)
@@ -307,10 +376,11 @@ class DesktopTests(unittest.TestCase):
             self.app.dirty = True
             with patch("osu_paint_desktop.filedialog.asksaveasfilename", return_value=str(filename)):
                 self.app.save_pattern()
-            self.assertFalse(self.app.dirty)
+            self.assertTrue(self.app.dirty)
             self.assertEqual(parse_frames(filename.read_text(encoding="utf-8")), [HEART])
             filename.write_text("\ufeff#.\n.#\n", encoding="utf-8")
-            with patch("osu_paint_desktop.filedialog.askopenfilename", return_value=str(filename)):
+            with patch("osu_paint_desktop.filedialog.askopenfilename", return_value=str(filename)), \
+                    patch("osu_paint_desktop.messagebox.askyesno", return_value=True):
                 self.app.open_pattern()
             self.assertEqual(self.app.frames, [["#.", ".#"]])
             self.app.dirty = True
