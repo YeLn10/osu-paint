@@ -165,40 +165,6 @@ class DesktopTests(unittest.TestCase):
         self.app._draw_preview()
         self.assertFalse(self.app.preview.find_withtag("note"))
 
-    def test_stable_repeated_picture_stays_visible_in_the_preview(self):
-        self.root.deiconify()
-        self.root.update()
-        picture = ["."] * 11 + ["#"] + ["."] * 12
-        self.app.frames = [picture] * 2
-        plan = compile_frames(self.app.frames, frame_times=[(2000, 2052), (2100, 2200)],
-                              fast_clear=True, target_client="stable")
-        self.app._refresh_preview(compiled_plan=plan)
-        for now in (2000, 2051, 2075, 2099, 2100, 2199):
-            self.app.seek_time.set(now)
-            self.app._draw_preview()
-            self.assertEqual(len(self.app.preview.find_withtag("note")), 1)
-            self.assertIn("帧", self.app.time_label.get())
-            self.assertNotIn("换帧", self.app.time_label.get())
-
-    def test_stable_changing_picture_uses_exact_rows_in_the_preview_at_ten_fps(self):
-        self.root.deiconify()
-        self.root.update()
-        self.app.frames = [["#."] * 24, [".#"] * 24]
-        plan = compile_frames(self.app.frames, frame_times=[(2000, 2075), (2100, 2200)],
-                              fast_clear=True, target_client="stable")
-        self.app._refresh_preview(compiled_plan=plan)
-        stage_h = min(self.app.preview.winfo_height() - 34 * self.app.scale,
-                      (self.app.preview.winfo_width() - 24 * self.app.scale) / 1.6)
-        for now in (2000, 2075, 2100, 2200):
-            self.app.seek_time.set(now)
-            self.app._draw_preview()
-            items = self.app.preview.find_withtag("note")
-            self.assertEqual(len(items), 24)
-            heights = sorted((sum(self.app.preview.coords(item)[1::2]) / 2 - 10 * self.app.scale) / stage_h
-                             for item in items)
-            for row, y in enumerate(heights):
-                self.assertAlmostEqual(y, (row + .5) / 24,
-                                       delta=plan["drift_playfield_fraction"] + 1e-6)
 
     def test_duplicate_is_independent_and_delete_selects_valid_frame(self):
         self.app.add_frame(duplicate=True)
@@ -219,14 +185,13 @@ class DesktopTests(unittest.TestCase):
             for merged in (False, True):
                 with self.subTest(keys=keys, holds=merged):
                     self.app.frames = [["#" * keys] * 3]
-                    plan = compile_frames(self.app.frames, 2000, 2400, fast_clear=True,
-                                          target_client="stable", merge_holds=merged)
+                    plan = compile_frames(self.app.frames, 2000, 2400, fast_clear=True, merge_holds=merged)
                     self.app._refresh_preview(compiled_plan=plan)
                     height = min(self.app.preview.winfo_height() - 34 * self.app.scale,
                                  (self.app.preview.winfo_width() - 24 * self.app.scale) / 1.6)
                     left = (self.app.preview.winfo_width() - height * 1.6) / 2
                     top = 10 * self.app.scale
-                    lane = min(1.6 * height, keys * 100 / 480 * height) / keys
+                    lane = 1.6 * height / keys
                     cells = [self.app.preview.coords(item) for item in self.app.preview.find_withtag("note")]
                     for col in range(keys):
                         column = sorted((cell for cell in cells if abs(cell[0] - left - col * lane) < 1e-5),
@@ -237,7 +202,8 @@ class DesktopTests(unittest.TestCase):
                             self.assertAlmostEqual(y1, edge, delta=1e-5)
                             self.assertAlmostEqual(x2 - x1, lane, delta=1e-5)
                             edge = y2
-                        self.assertAlmostEqual(edge, top + height, delta=1e-5)
+                        self.assertGreaterEqual(top + height - edge, height / 768 - 1e-5)
+                        self.assertLess(top + height - edge, 2 * height / 768)
 
     def test_empty_frame_is_editable_but_not_exportable(self):
         self.app.add_frame()

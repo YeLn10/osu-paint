@@ -33,10 +33,10 @@ def video_result(audio=b"OggS test audio"):
 def optimized_video_result():
     frames = [["#.", ".."], ["..", ".#"]]
     plan = compile_frames(frames, frame_times=[(2000, 2230), (2250, 2500)],
-                          fast_clear=True, target_client="stable", allow_empty_frames=True,
+                          fast_clear=True, allow_empty_frames=True,
                           anchor_reference=True)
-    video = dict(filename="optimized.mp4", fps=4, frame_fps=4, width=2, height=2,
-                 start_ms=2000, duration_ms=500, game_fps=60, requested_fps=4, requested_height=24)
+    video = dict(filename="optimized.mp4", fps=4, width=2, height=2,
+                 start_ms=2000, duration_ms=500, refresh_hz=60, requested_fps=4, requested_height=2)
     plan["video"] = video.copy()
     return dict(plan=plan, video=video, audio=b"OggS test audio")
 
@@ -68,10 +68,11 @@ class DesktopVideoTests(unittest.TestCase):
             self.app.import_video()
         self.root.update_idletasks()
 
-    def test_old_stable_ten_fps_video_can_open_and_export_with_new_sweeps(self):
+    def test_old_client_metadata_is_discarded_while_frames_and_audio_reopen(self):
         self.app._apply_video(video_result())
         data = copy.deepcopy(self.app._project_data())
         data["target_client"] = "stable"
+        data["video"].update(game_fps=60, frame_fps=10)
         data["video"].update(fps=10, height=24, duration_ms=200)
         data["frames"] = [["#."] * 24, [".#"] * 24]
         data["frame_times"] = [[2000, 2052], [2100, 2200]]
@@ -80,14 +81,16 @@ class DesktopVideoTests(unittest.TestCase):
         self.assertEqual(self.app.frames, data["frames"])
         self.assertEqual(self.app.audio_data, b"OggS test audio")
         self.assertIsNotNone(self.app.plan)
-        self.assertEqual(self.app.plan["transition_ms"], 25)
+        self.assertEqual(self.app.plan["transition_ms"], minimum_transition_ms(27))
+        self.assertEqual(self.app.plan["target_client"], "lazer")
+        self.assertNotIn("game_fps", self.app.video)
+        self.assertNotIn("frame_fps", self.app.video)
         self.assertEqual(str(self.app.export_button["state"]), "normal")
 
     def test_eighteen_column_video_round_trip_keeps_audio_and_edit_semantics(self):
         frames = [["#" + "." * 17] * 2, ["." * 17 + "#"] * 2]
         windows = [(2000, 2240), (2250, 2500)]
-        plan = compile_frames(frames, frame_times=windows, fast_clear=True,
-                              target_client="stable", allow_empty_frames=True, anchor_reference=True)
+        plan = compile_frames(frames, frame_times=windows, fast_clear=True, allow_empty_frames=True, anchor_reference=True)
         video = dict(filename="wide-video.mp4", fps=4, width=18, height=2,
                      start_ms=2000, duration_ms=500)
         plan["video"] = video.copy()
@@ -110,24 +113,22 @@ class DesktopVideoTests(unittest.TestCase):
         self.open_video_dialog()
         for key, value in dict(fps="4", width="18", height="2").items():
             self.app.video_fields[key].set(value)
-        self.app.video_target.set("stable")
         with patch("osu_paint_desktop.read_video", return_value=video_result()) as importer:
             self.app.video_start_button.invoke()
             self.wait_for(lambda: not self.app.importing)
         self.assertEqual(importer.call_args.kwargs["width"], 18)
         self.assertEqual(importer.call_args.kwargs["fps"], 4)
-        self.assertEqual(importer.call_args.kwargs["target_client"], "stable")
+        self.assertNotIn("target_client", importer.call_args.kwargs)
         self.assertNotIn("reference_animation", importer.call_args.kwargs)
 
     def test_refresh_options_show_actual_quality_and_pass_original_requests(self):
         self.open_video_dialog()
-        self.app.video_target.set("stable")
-        self.assertTrue(self.app.video_game_sync.get())
-        self.assertEqual(self.app.video_game_fps.get(), "60")
+        self.assertTrue(self.app.video_refresh_sync.get())
+        self.assertEqual(self.app.video_refresh_hz.get(), "60")
         for key, value in dict(fps="17", width="18", height="24").items():
             self.app.video_fields[key].set(value)
         effective = resolve_video_options(fps=17, width=18, height=24, start_ms=2000,
-                                          scroll_speed=27, target_client="stable", refresh_hz=60)
+                                          scroll_speed=27, refresh_hz=60)
         self.assertIn(f"18 × {effective['height']} 行", self.app.video_effective_label.get())
         self.assertIn(f"{effective['fps']:g} FPS", self.app.video_effective_label.get())
         self.assertIn("请求 18 × 24 行 · 17 FPS", self.app.video_effective_label.get())
@@ -154,17 +155,15 @@ class DesktopVideoTests(unittest.TestCase):
 
     def test_fractional_refresh_works_on_lazer_and_invalid_limits_prevent_import(self):
         self.open_video_dialog()
-        self.app.video_target.set("stable")
-        self.app.video_game_fps.set("999")
+        self.app.video_refresh_hz.set("1001")
         self.assertIn("参数无效", self.app.video_effective_label.get())
         with patch("osu_paint_desktop.messagebox.showerror") as report, \
                 patch("osu_paint_desktop.read_video") as importer:
             self.app.video_start_button.invoke()
         report.assert_called_once()
         importer.assert_not_called()
-        self.app.video_target.set("lazer")
-        self.assertTrue(self.app.video_game_sync.get())
-        self.app.video_game_fps.set("60000/1001")
+        self.assertTrue(self.app.video_refresh_sync.get())
+        self.app.video_refresh_hz.set("60000/1001")
         with patch("osu_paint_desktop.read_video", return_value=video_result()) as importer:
             self.app.video_start_button.invoke()
             self.wait_for(lambda: not self.app.importing)
@@ -173,10 +172,10 @@ class DesktopVideoTests(unittest.TestCase):
 
     def test_disabling_refresh_ignores_unused_invalid_rate_and_phase(self):
         self.open_video_dialog()
-        self.app.video_game_fps.set("60/0")
+        self.app.video_refresh_hz.set("60/0")
         self.app.video_refresh_phase.set("invalid")
         self.assertIn("参数无效", self.app.video_effective_label.get())
-        self.app.video_game_sync.set(False)
+        self.app.video_refresh_sync.set(False)
         self.assertNotIn("参数无效", self.app.video_effective_label.get())
         with patch("osu_paint_desktop.read_video", return_value=video_result()) as importer:
             self.app.video_start_button.invoke()
@@ -186,8 +185,7 @@ class DesktopVideoTests(unittest.TestCase):
 
     def test_refresh_and_hold_metadata_round_trip_without_moving_audio(self):
         frames = [["#."] * 3, [".#"] * 3]
-        plan = compile_frames(frames, frame_times=[(2005, 2240), (2244, 2505)], fast_clear=True,
-                              target_client="stable", merge_holds=True, anchor_reference=True)
+        plan = compile_frames(frames, frame_times=[(2005, 2240), (2244, 2505)], fast_clear=True, merge_holds=True, anchor_reference=True)
         video = dict(filename="refresh.mp4", fps=4, width=2, height=3, start_ms=2000,
                      duration_ms=500, refresh_hz=60, refresh_phase_ms=5, requested_fps=4,
                      requested_height=3)
@@ -207,39 +205,13 @@ class DesktopVideoTests(unittest.TestCase):
         self.assertNotIn("refresh_phase_ms", self.app.video)
         self.assertEqual(self.app.audio_data, b"OggS test audio")
 
-    def test_game_fps_metadata_reopens_with_audio_and_actual_dimensions(self):
-        result = optimized_video_result()
-        self.app._apply_video(result)
-        saved = json.loads(json.dumps(self.app._project_data()))
-        self.app.load_text("#", keep_video=False)
-        self.app.load_project(saved)
-        self.app._refresh_preview()
-        self.assertEqual(self.app._project_data(), saved)
-        self.assertEqual(self.app.plan["video"], result["video"])
-        self.assertEqual(self.app.audio_data, b"OggS test audio")
-        self.assertEqual(str(self.app.export_button["state"]), "normal")
-        self.assertIn("游戏 60 FPS", self.app.status.get())
-        self.assertIn("需要游戏限帧和刷新对齐", self.app.status.get())
-
-    def test_switching_optimized_video_to_lazer_clears_alignment_and_reopens(self):
-        self.app._apply_video(optimized_video_result())
-        self.app.target_client.set("lazer")
-        for key in ("game_fps", "frame_fps", "requested_fps", "requested_height"):
-            self.assertNotIn(key, self.app.video)
-        self.assertIn("需重新导入视频才能重新对齐", self.app.status.get())
-        saved = copy.deepcopy(self.app._project_data())
-        self.app.load_project(saved)
-        self.app._refresh_preview()
-        self.assertIsNotNone(self.app.plan)
-        self.assertEqual(self.app._project_data(), saved)
-        self.assertEqual(self.app.audio_data, b"OggS test audio")
 
     def test_resizing_optimized_video_clears_alignment_and_updates_dimensions(self):
         self.app._apply_video(optimized_video_result())
         text = "\n---\n".join("\n".join(["#" + "." * 16] * 3) for _ in range(2))
         self.app.load_text(text)
         self.assertEqual((self.app.video["width"], self.app.video["height"]), (17, 3))
-        for key in ("game_fps", "frame_fps", "requested_fps", "requested_height"):
+        for key in ("refresh_hz", "refresh_phase_ms", "requested_fps", "requested_height"):
             self.assertNotIn(key, self.app.video)
         self.assertIn("画布尺寸已改变", self.app.status.get())
         saved = copy.deepcopy(self.app._project_data())
@@ -249,15 +221,6 @@ class DesktopVideoTests(unittest.TestCase):
         self.assertIsNotNone(self.app.plan)
         self.assertEqual(self.app.audio_data, b"OggS test audio")
 
-    def test_pseudo_optimized_project_rejects_height_that_would_be_silently_reduced(self):
-        self.app._apply_video(optimized_video_result())
-        before = copy.deepcopy(self.app._project_data())
-        invalid = copy.deepcopy(before)
-        invalid["video"]["height"] = 24
-        invalid["frames"] = [frame + [".."] * 22 for frame in invalid["frames"]]
-        with self.assertRaisesRegex(ValueError, "与实际画面不一致"):
-            self.app.load_project(invalid)
-        self.assertEqual(self.app._project_data(), before)
 
     def test_removed_reference_project_is_rejected_without_reinterpreting_pixels(self):
         self.app._apply_video(video_result())
@@ -269,10 +232,9 @@ class DesktopVideoTests(unittest.TestCase):
         self.assertEqual(self.app._project_data(), before)
 
     def test_optimized_playback_settings_require_overwrite_confirmation(self):
-        plan = compile_frames([["#.", ".."]], frame_times=[(2000, 2250)], fast_clear=True,
-                              target_client="stable", allow_empty_frames=True, anchor_reference=True)
+        plan = compile_frames([["#.", ".."]], frame_times=[(2000, 2250)], fast_clear=True, allow_empty_frames=True, anchor_reference=True)
         video = dict(filename="optimized.mp4", fps=4, width=2, height=2,
-                     start_ms=2000, duration_ms=250, game_fps=60)
+                     start_ms=2000, duration_ms=250)
         plan["video"] = video.copy()
         self.app._apply_video(dict(plan=plan, video=video, audio=None))
         with tempfile.TemporaryDirectory() as directory:
@@ -390,18 +352,16 @@ class DesktopVideoTests(unittest.TestCase):
         self.assertIsNone(self.app.import_dialog)
         self.assertEqual(self.app._project_data(), before)
 
-    def test_target_client_round_trip_and_old_project_defaults(self):
-        self.app.target_client.set("stable")
-        self.app._refresh_preview()
-        self.assertEqual(self.app.plan["target_client"], "stable")
+    def test_only_lazer_is_available_and_scroll_speed_still_round_trips(self):
+        self.assertFalse(hasattr(self.app, "target_client"))
+        self.app.fields["scroll_speed"].set("31")
         saved = copy.deepcopy(self.app._project_data())
-        self.app.target_client.set("lazer")
+        self.assertNotIn("target_client", saved)
+        self.app.fields["scroll_speed"].set("27")
         self.app.load_project(saved)
         self.app._refresh_preview()
-        self.assertEqual(self.app.plan["target_client"], "stable")
-        del saved["target_client"]
-        self.app.load_project(saved)
-        self.assertEqual(self.app.target_client.get(), "lazer")
+        self.assertEqual(self.app.plan["target_client"], "lazer")
+        self.assertEqual(self.app.plan["scroll_speed"], 31)
 
     def test_bad_options_and_import_failure_preserve_existing_project(self):
         before = copy.deepcopy(self.app._project_data())

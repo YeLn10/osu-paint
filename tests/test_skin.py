@@ -70,16 +70,15 @@ class SkinTests(unittest.TestCase):
                                        ("ColumnLineWidth", keys + 1)):
                     values = [float(value) for value in section[option].split(",") if value]
                     self.assertEqual(len(values), length)
-                    expected = min(768 / keys, 100) if option == "ColumnWidth" else 0
+                    expected = 768 / keys if option == "ColumnWidth" else 0
                     self.assertTrue(all(abs(value - expected) < 1e-8 for value in values))
 
-    def test_high_key_counts_use_one_continuous_stage(self):
+    def test_skin_omits_unsupported_stage_switches_and_hides_borders(self):
         for keys in range(10, 19):
             with self.subTest(keys=keys):
                 section = self.sections.get(keys, {})
-                # Missing SplitStages falls back to the client's >9K split layout.
-                self.assertEqual(section.get("SplitStages"), "0")
-                self.assertEqual(section.get("StageSeparation"), "0")
+                self.assertNotIn("SplitStages", section)
+                self.assertNotIn("StageSeparation", section)
                 self.assertEqual(section.get("StageLeft"), "blank")
                 self.assertEqual(section.get("StageRight"), "blank")
 
@@ -95,7 +94,7 @@ class SkinTests(unittest.TestCase):
                         self.assertEqual(height, 1 if suffix == "L" else 40)
                         self.assertEqual(pixels, b"\x00\x00\x00\xff" * width * height)
 
-    def test_judgement_position_matches_stable_compiler_baseline(self):
+    def test_judgement_position_matches_lazer_compiler(self):
         for keys, section in self.sections.items():
             with self.subTest(keys=keys):
                 self.assertEqual(section["HitPosition"], "480")
@@ -128,8 +127,7 @@ class SkinTests(unittest.TestCase):
             for keys in range(1, 19):
                 with self.subTest(profile=filename, keys=keys):
                     width = float(sections[keys]["ColumnWidth"].split(",")[0])
-                    self.assertAlmostEqual(width * keys, min(480 * ratio, keys * 100), delta=1e-7)
-                    self.assertLessEqual(width, 100)
+                    self.assertAlmostEqual(width * keys, 480 * ratio, delta=1e-7)
 
 
 if __name__ == "__main__":

@@ -23,10 +23,9 @@ def skin_ini(*, rows=24, aspect_ratio=DEFAULT_ASPECT_RATIO, label="16:10"):
     lines = ["[General]", f"Name: osu-paint Pixel Film {label} ({rows} rows)",
              "Author: osu-paint", "Version: 2.7"]
     for keys in range(1, 19):
-        width = f"{min(480 * aspect_ratio / keys, 100):.9f}".rstrip("0").rstrip(".")
+        width = f"{480 * aspect_ratio / keys:.9f}".rstrip("0").rstrip(".")
         lines.extend([
-            "", "[Mania]", f"Keys: {keys}", "SplitStages: 0", "StageSeparation: 0",
-            "ColumnStart: 0", "ColumnRight: 0", "HitPosition: 480",
+            "", "[Mania]", f"Keys: {keys}", "HitPosition: 480",
             "ColumnWidth: " + ",".join([width] * keys),
             "ColumnSpacing: " + ",".join(["0"] * (keys - 1)),
             "ColumnLineWidth: " + ",".join(["0"] * (keys + 1)),
