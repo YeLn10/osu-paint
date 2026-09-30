@@ -49,6 +49,74 @@ def position(points, time, time_range):
 
 
 class ExportTests(unittest.TestCase):
+    def test_stable_identical_frames_keep_the_picture_through_the_transition(self):
+        picture = ["."] * 11 + ["#"] + ["."] * 12
+        windows = [(2000, 2052), (2100, 2200)]
+        plan = compile_frames([picture] * 2, frame_times=windows,
+                              fast_clear=True, target_client="stable")
+        points, notes = decode(encode_osu(plan))
+        self.assertEqual([(f["start_ms"], f["end_ms"]) for f in plan["frames"]], windows)
+        for now in range(2000, 2201):
+            visible = [1 - position(points, t, plan["time_range_ms"]) +
+                       position(points, now, plan["time_range_ms"]) for _, t in notes]
+            self.assertEqual(sum(.2 <= y <= .8 for y in visible), 1, f"Picture blinked at {now} ms")
+        self.assertEqual(len(notes), 1)
+
+    def test_stable_identical_frames_still_clear_during_an_explicit_gap(self):
+        plan = compile_frames([["#"] * 24] * 2, frame_times=[(2000, 2500), (3000, 3500)],
+                              fast_clear=True, target_client="stable")
+        points, notes = decode(encode_osu(plan))
+        self.assertEqual(len(notes), 48)
+        for now in (2549, 2750, 2951):
+            self.assertFalse(any(0 <= 1 - position(points, t, plan["time_range_ms"]) +
+                                 position(points, now, plan["time_range_ms"]) <= 768 / 658
+                                 for _, t in notes))
+
+    def test_stable_changing_frames_use_short_exact_integer_sweeps(self):
+        pictures = [["#."] * 24, [".#"] * 24]
+        plan = compile_frames(pictures, frame_times=[(2000, 2075), (2100, 2200)],
+                              fast_clear=True, target_client="stable")
+        self.assertEqual(plan["transition_ms"], 25)
+        points, notes = decode(encode_osu(plan))
+        for note in plan["notes"]:
+            frame = plan["frames"][note["frame"]]
+            self.assertEqual(note["time_ms"], frame["end_ms"] + 24 - note["row"])
+            y = 1 - position(points, note["time_ms"], plan["time_range_ms"]) + position(points, frame["start_ms"], plan["time_range_ms"])
+            self.assertAlmostEqual(y, note["y"], delta=1e-6)
+        self.assertTrue(all(t == int(t) for _, t in notes))
+
+    def test_stable_changing_frames_hold_at_ten_fps(self):
+        pictures = [["#."] * 24, [".#"] * 24]
+        windows = [(2000, 2075), (2100, 2200)]
+        plan = compile_frames(pictures, frame_times=windows, fast_clear=True, target_client="stable")
+        points, notes = decode(encode_osu(plan))
+        for index, (start, end) in enumerate(windows):
+            for now in (start, (start + end) / 2, end):
+                visible = [(x, 1 - position(points, t, plan["time_range_ms"]) +
+                            position(points, now, plan["time_range_ms"])) for x, t in notes]
+                visible = [(int(x * 2 / 512), y) for x, y in visible if 0 <= y <= 768 / 658]
+                self.assertEqual(len(visible), 24)
+                self.assertEqual({col for col, _ in visible}, {index})
+        self.assertTrue(all(t == int(t) for _, t in notes))
+        self.assertEqual(plan["transition_ms"], 25)
+
+    def test_stable_sweeps_preserve_geometry_and_clear_at_all_scroll_speeds(self):
+        for speed in (1, 15, 27, 40):
+            for height in (1, 2, 3, 6, 24, 128):
+                with self.subTest(speed=speed, height=height):
+                    plan = compile_frames([["#."] * height, [".#"] * height], 2000, 4000,
+                                          scroll_speed=speed, fast_clear=True, target_client="stable")
+                    points, _ = decode(encode_osu(plan))
+                    self.assertTrue(all(a[0] < b[0] for a, b in zip(points, points[1:])))
+                    self.assertTrue(all(6 <= beat <= 60000 and .01 <= sv <= 10 for _, beat, sv in points))
+                    for note in plan["notes"]:
+                        frame = plan["frames"][note["frame"]]
+                        y = 1 - position(points, note["time_ms"], plan["time_range_ms"])
+                        self.assertAlmostEqual(y + position(points, frame["start_ms"], plan["time_range_ms"]),
+                                               note["y"], delta=1e-6)
+                        self.assertGreater(y + position(points, frame["exit_end_ms"], plan["time_range_ms"]),
+                                           768 / 658 + 8 / 658)
+
     def test_stable_rows_remain_distinct_on_integer_millisecond_grid(self):
         for height in (1, 6, 24, 128):
             plan = compile_frames([["#"] * height], 2000, 4000, fast_clear=True, target_client="stable")
@@ -67,7 +135,42 @@ class ExportTests(unittest.TestCase):
         plan = compile_frames([["#"] * 24] * 1000, frame_times=windows,
                               fast_clear=True, target_client="stable")
         self.assertEqual(plan["base_beat_length_ms"], 500)
-        self.assertEqual(plan["transition_ms"], 48)
+        self.assertEqual(plan["transition_ms"], 25)
+        self.assertLess(len(plan["notes"]), 1000 * 24)
+        points, _ = decode(encode_osu(plan))
+        for frame in plan["frames"]:
+            origin = plan["frames"][frame["note_frame"]]["start_ms"]
+            drift = position(points, frame["end_ms"], plan["time_range_ms"]) - position(points, origin, plan["time_range_ms"])
+            self.assertLess(drift, .014, "Repeated pictures must be renewed before drift exceeds half a row")
+
+    def test_stable_long_changing_video_keeps_the_reference_bpm(self):
+        windows = [(2000 + i * 100, 2075 + i * 100) for i in range(1000)]
+        pictures = [["#."] * 24, [".#"] * 24] * 500
+        plan = compile_frames(pictures, frame_times=windows, fast_clear=True, target_client="stable")
+        points, notes = decode(encode_osu(plan))
+        durations = {}
+        for index, (start, beat, _) in enumerate(points[:-1]):
+            end = min(points[index + 1][0], notes[-1][1])
+            if end > start:
+                key = round(beat, 3)
+                durations[key] = durations.get(key, 0) + end - start
+        self.assertEqual(max(durations, key=durations.get), 500)
+        self.assertEqual(len(notes), 24000)
+        self.assertTrue(all(t == int(t) for _, t in notes))
+
+    def test_stable_reused_picture_then_changes_without_losing_source_frames(self):
+        pictures = [["#."] * 24, ["#."] * 24, [".#"] * 24]
+        windows = [(2000, 2452), (2500, 2952), (3000, 3500)]
+        plan = compile_frames(pictures, frame_times=windows, fast_clear=True, target_client="stable")
+        points, notes = decode(encode_osu(plan))
+        self.assertEqual(len(plan["frames"]), 3)
+        self.assertEqual(len(notes), 48)
+        for now, column in ((2475, 0), (2999, 1), (3000, 1), (3499, 1)):
+            visible = [(x, 1 - position(points, t, plan["time_range_ms"]) +
+                        position(points, now, plan["time_range_ms"])) for x, t in notes]
+            visible = [(int(x * 2 / 512), y) for x, y in visible if .2 <= y <= .8]
+            self.assertTrue(visible)
+            self.assertEqual({c for c, _ in visible}, {column})
 
     def test_fast_clear_removes_notes_from_full_stage_within_one_ms(self):
         plan = compile_frames([["#"]], 2000, 4000, fast_clear=True)

@@ -254,7 +254,8 @@ class PaintApp:
                             "自由模式：选中一帧，填写本帧开始、结束时间。允许留空档，不能重叠；间隔须足够切帧。\n\n"
                             "切帧时长：推进图案所需的时间。越短移动越快，越长越容易看到下落。远离的两帧分别退场、进场。\n"
                             "极速清场：自动用合法最高速度计算时长，覆盖手动切帧值；滚速 27 时约 0.575 ms。不能保证零过渡画面。\n\n"
-                            "stable：整数毫秒音符，最短切帧至少为行数 × 2 ms；展示还需切帧时长 + 2 ms。\n"
+                            "stable：整数毫秒音符，各行先排整数时间，再计算分段滚速。连续相同画面复用音符。\n"
+                            "stable 使用分段滚速；默认滚速下 24 行切帧为 25 ms，可使用 10 FPS。仍有滚动切换。\n"
                             "采用传统皮肤默认判定线模型，需关闭随 BPM 缩放；尚未实机验收。\n\n"
                             "游戏滚速：必须与游戏设置一致。它决定时间距离如何换算成舞台位置，不是动画帧率；"
                             "更改后会重新计算音符与变速点，不会改变你填写的展示时间。\n\n"
@@ -559,7 +560,7 @@ class PaintApp:
             combo = ttk.Combobox(panel, textvariable=variable, values=choices, state="readonly", width=12)
             combo.grid(row=row, column=1, pady=5)
             inputs.append(combo)
-        ttk.Label(panel, text="亮度／对比度调整后按阈值转换。stable 需要更长切帧。\n预览帧序号按所填 FPS 采样，从 1 开始；不会改变导入范围。",
+        ttk.Label(panel, text="亮度／对比度调整后按阈值转换。stable：默认滚速下 24 行可使用 10 FPS。\n预览帧序号按所填 FPS 采样，从 1 开始；不会改变导入范围。",
                   style="Muted.TLabel", wraplength=400).grid(row=11, column=0, columnspan=2, sticky="w", pady=(12, 8))
         self.video_frame_index = tk.StringVar(value="1")
         ttk.Label(panel, text="预览帧序号 / 从 1 开始", style="Muted.TLabel").grid(row=12, column=0, sticky="w")
@@ -823,7 +824,11 @@ class PaintApp:
                                               fill=ACCENT if note["column"] % 2 == 0 else MINT, outline="", tags="note")
         self.preview.create_line(left, top + stage_h, left + stage_w, top + stage_h, fill=INK, width=2)
         index = bisect_right(self.frame_starts, current) - 1
-        frame = index + 1 if index >= 0 and current <= self.plan["frames"][index]["end_ms"] else None
+        frames = self.plan["frames"]
+        holding = index >= 0 and (current <= frames[index]["end_ms"] or
+                                  (index + 1 < len(frames) and
+                                   frames[index].get("note_frame", index) == frames[index + 1].get("note_frame", index + 1)))
+        frame = index + 1 if holding else None
         phase = f"第 {frame} / {len(self.frames)} 帧" if frame is not None else "空档 / 进场 / 换帧 / 退场"
         self.time_label.set(f"{current:,.2f} ms   ·   {phase}")
 

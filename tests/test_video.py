@@ -21,6 +21,12 @@ from osu_paint_video import ImportCancelled, _run_ffmpeg, import_video, preview_
 
 
 class VideoValidationTests(unittest.TestCase):
+    def test_stable_fps_advice_is_valid_at_the_displayed_precision(self):
+        options = dict(width=10, height=24, start_ms=2000, scroll_speed=27, target_client="stable")
+        with self.assertRaisesRegex(ValueError, "19.230"):
+            validate_video_options(fps=20, **options)
+        self.assertEqual(validate_video_options(fps=19.230, **options), 25)
+
     def test_rejects_invalid_fps_dimensions_and_offset(self):
         defaults = dict(fps=10, width=10, height=24, start_ms=2000, scroll_speed=27)
         for field, value in (("fps", 0), ("fps", -1), ("fps", math.nan), ("fps", math.inf),
@@ -220,6 +226,9 @@ class VideoImportTests(unittest.TestCase):
         result = self.load(target_client="stable", height=24, fps=10)
         self.assertIsNotNone(result["audio"])
         self.assertEqual(result["plan"]["target_client"], "stable")
+        self.assertEqual(result["plan"]["transition_ms"], 25)
+        self.assertEqual(result["video"]["fps"], 10)
+        self.assertEqual(result["plan"]["frames"][0]["end_ms"], 2075)
         self.assertTrue(all(n["time_ms"] == int(n["time_ms"]) for n in result["plan"]["notes"]))
         with self.assertRaisesRegex(ValueError, "stable"):
             self.load(target_client="stable", height=24, fps=30)

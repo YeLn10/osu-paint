@@ -37,7 +37,9 @@ def validate_video_options(*, fps, width, height, start_ms, scroll_speed, target
     if not math.isfinite(start_ms) or start_ms - transition < 100:
         raise ValueError("视频开始时间须为有限数值，并在进场前保留至少 100 ms。")
     if target_client == "stable" and math.floor(1000 / fps) < 2 * transition + 2:
-        raise ValueError(f"stable 的 {height} 行画面至少需要 {2 * transition + 2:g} ms / 帧；请降低 FPS 或行数。")
+        maximum_fps = math.floor(1000000 / (2 * transition + 2)) / 1000
+        raise ValueError(f"stable 的 {height} 行画面至少需要 {2 * transition + 2:g} ms / 帧；"
+                         f"FPS 须不超过 {maximum_fps:.3f}，或降低行数。")
     if target_client == "lazer" and 1000 / fps <= transition * 3:
         raise ValueError("当前滚速不足以容纳此 FPS 的展示和切帧；请降低 FPS 或提高 lazer 滚速。")
     return transition

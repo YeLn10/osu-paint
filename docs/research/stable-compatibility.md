@@ -8,16 +8,34 @@
 
 - [官方 osu 格式说明](https://osu.ppy.sh/wiki/en/Client/File_formats/osu_(file_format)#hit-objects) 把音符时间定义为整数毫秒。本模式遵守这一格式，不依赖小数音符时间。
 - [官方 mania 设置说明](https://osu.ppy.sh/wiki/en/Game_mode/osu%21mania#bpm-scaling-and-fixed-scroll-speed) 区分 BPM scaling 与 fixed scroll speed；fixed 仍接受谱面 BPM/SV 变化。要求关闭 Scale osu!mania scroll speed with BPM，不是启用恒速 MOD。
-- [官方 legacy 皮肤兼容代码](https://github.com/ppy/osu/blob/master/osu.Game/Skinning/LegacyManiaSkinConfiguration.cs) 记录默认判定线位置 402；[滚速兼容代码](https://github.com/ppy/osu/blob/master/osu.Game.Rulesets.Mania/UI/DrawableManiaRuleset.cs) 用 `11485 / scrollSpeed` 并按判定线高度校正。stable 模式采用传统默认基准 `11485 / scrollSpeed`；这是依据官方兼容实现的模型，并非对闭源 stable 当前二进制的精确重现。
-- stable 参考源码链接当前不可公开读取，未据此声称已核对所有解析边界。保留原有红线 6–60000 ms、SV 0.01–10 的保守范围；参考 BPM 分组仍使用项目已有模型，需要实机进一步校验。
+- [官方 legacy 皮肤兼容代码](https://github.com/ppy/osu/blob/master/osu.Game/Skinning/LegacyManiaSkinConfiguration.cs) 记录默认判定线位置 402；[滚速兼容代码](https://github.com/ppy/osu/blob/master/osu.Game.Rulesets.Mania/UI/DrawableManiaRuleset.cs) 用 `11485 / scrollSpeed` 并按判定线高度校正。stable 模式采用传统默认基准 `11485 / scrollSpeed`。
+- 本次只读检查了本机 stable 二进制的 mania 移动变换：按有效 BPM 分段积分，移动变换的时间端点转换为整数。局部反编译材料位于 `build/stable-diagnostics/mania-manager.cs`、`mania-scroll.cs`、`timing-point.cs`；EXE 文件版本 1.3.3.8，SHA256 为 `C7B77C2F6FC458521114E06C197749601651E1BD4FEEBE503F457232702B16AB`。这支持整数控制点和分段布点方案，但没有核对所有客户端行为。继续保留红线 6–60000 ms、SV 0.01–10 的保守生成范围。
 
 ## 整数时间策略
 
-简单地把现有亚毫秒换帧谱面的音符时间取整，会让多行落在同一毫秒。stable 模式先把切帧时间增至至少 `2 × 行数` ms，再反解每行音符时间并取整；各行原始时间间距至少 `0.6 / 行数 × 切帧时长 / 1.1 > 1 ms`。自动化验证检查输出中各行仍有不同时间，位置量化误差不超过半行。
+旧方案将切帧拉长到 `2 × 行数` ms，用整屏匀速推进后反解音符时间并取整。默认滚速下 24 行因此需要 48 ms，取整仍会产生行位置误差。本次改为先安排整数行时间，再拟合分段 SV，保持真实 mania 音符。
 
-每帧加入 `切帧时长 + 1 ms` 的 500 ms beatLength / SV=0.01 段，使参考 BPM 段的累计时间超过快进段；保留实际漂移报告。每帧展示至少比该段长 1 ms，所以导入周期须至少 `2 × 切帧时长 + 2 ms`。这是本生成器为兼容采取的限制，不是声称 stable 引擎只支持这个 FPS。
+令画面时间距离为 R、行数为 H、生成器最大速度为 V=`500 / 6 × 10`。下边距时间为 `ceil((0.2 + 0.3/H)R/V)`，行间时间为 `max(1, ceil(0.6R/H/V))`，上方清场时间为 `ceil((0.3 + 0.3/H)R/V)`。总切帧时间等于两边距加 `(H-1) × 行间时间`。默认滚速 27、24 行的三个时间分别为 1、1、1 ms，总计 25 ms；每行音符时间直接设为退场开始加下边距时间加对应整数行间时间。下边距滚速扣除展示期间的累计漂移，使展示开始的行位置与目标一致；行间和上边距按各自距离拟合。手动增加的切帧时间放入下边距段。
 
-测试覆盖 1、6、24、128 行、1000 帧的参考 BPM，以及真实带音乐视频导入。测试是独立解析导出数据并积分的模型测试，不替代游戏渲染验收。
+每组音符加入 `切帧时长 + 1 ms` 的 500 ms beatLength / SV=0.01 段，保持参考 BPM 为 120；展示至少需 `切帧时长 + 2 ms`。视频周期至少需 `2 × 切帧时长 + 2 ms`，24 行默认为 52 ms；这是本生成器采用的参考 BPM 策略，不是引擎 FPS 上限。取消此前人为加入的 10% 切帧占比限制。均分模式从下一帧已取整的开始时间反算前帧结束，避免独立四舍五入导致奇数切帧少 1 ms；自由模式保留用户给定窗口。
+
+紧邻相同画面复用一组音符，覆盖重复切帧；累计漂移超过初始参考段漂移加半行之前重新布置。源帧数量和主动空档保留。测试覆盖滚速 1、15、27、40，1、2、3、6、24、128 行，长动画参考 BPM、真实 Tk 舞台与带音乐视频。独立解析 `.osu` 再积分检查行位置、退场与合法范围，不能替代游戏渲染验收。
+
+## 闪现复现（2026-09-30）
+
+用户录屏展示的是编辑器舞台预览。对应导出报告为 stable、10 FPS、24 行、2192 帧：每 100 ms 只有 52 ms 展示，余下 48 ms 是整幅图案的滚动切换。录屏的 6476 ms 正位于 6452–6500 ms 切换段，所以出现旧图案在下方、新图案在上方的分裂画面。
+
+最小复现是两帧相同的 24 行图案，仅中间一行有一个音符。旧输出在 2075 ms 的画面中央没有音符，原有仅检查展示窗口的测试无法捕捉这一问题。诊断命令为 `.\.build-env\Scripts\python.exe build\stable-diagnostics\flash_repro.py`。复用音符后此诊断通过；回归逐毫秒检查相同画面在整个周期内可见。
+
+此前仅复用重复画面并降到 2 FPS 的方案没有缩短变化画面的 48 ms 切换，用户仍能看到明显滚动，因此要求重做。本次重写变化画面的整数布点与分段滚速，恢复 24 行 / 10 FPS：每 100 ms 展示 75 ms、切帧 25 ms。多行依然必须落在不同整数毫秒，变化画面的切换仍然存在，不能宣称零滚动或已通过实机验收。
+
+## 重做后的产物与验证
+
+完整测试共 87 项通过，命令为 `.\.build-env\Scripts\python.exe -m unittest discover -s tests -v`。包含新回归：24 行的音符依次位于退场开始后 1–24 ms，展示开始位置误差小于百万分之一画面高度；1000 个变化帧维持参考 BPM；旧 10 FPS 项目可以打开并导出；真实 Tk 预览包含全部 24 行。
+
+原导出缓存已被 5 FPS / 10 行结果覆盖；找到原视频 `3724723_da3-1-16.mp4` 后，以当前转换参数重新解码出 2192 帧的 24 行 / 10 FPS 版本，输出到 `output/stable-redesigned-user-video/`。另外保留当前缓存全部 1096 帧，重建 10 行 / 5 FPS 版本到 `output/stable-redesigned-current-settings/`，切帧由 20 ms 缩至 11 ms。两份均维持 2000–221200 ms，并使用当前原有 Ogg 字节；`.osz` 只有 `pattern.osu` 和 `audio.ogg`。开始、中间、结束的独立积分分别验证了 6576 和 3288 个展示采样，行位置误差分别低于 `1.9e-8` 和 `2.9e-8` 画面高度；各自 `project.json` 可重新打开并生成完全相同计划。获取方式、源视频/报告与音轨 SHA256 及检查结果保存在各目录 `validation.json`。旧导出文件不会自动变化。
+
+桌面程序重新构建到 `dist/osu-paint.exe`，SHA256 为 `EDC305370C526812F2500DC5DE84D6E8E9F666BF8AF5EF384DACC3CA19233542`，打包日志位于 `build/stable-package.log`。归档检查确认包含编辑器、转换、音频模块与 FFmpeg；使用本次专用测试副本确认打包后的编辑器成功打开并正常关闭。实际游戏内的皮肤、滚速与渲染验收仍未完成；历史检查时用户已停止电脑控制，本次未继续控制其游戏窗口。
 
 ## 转换预览验证
 

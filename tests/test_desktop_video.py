@@ -55,6 +55,21 @@ class DesktopVideoTests(unittest.TestCase):
             self.app.import_video()
         self.root.update_idletasks()
 
+    def test_old_stable_ten_fps_video_can_open_and_export_with_new_sweeps(self):
+        self.app._apply_video(video_result())
+        data = copy.deepcopy(self.app._project_data())
+        data["target_client"] = "stable"
+        data["video"].update(fps=10, height=24, duration_ms=200)
+        data["frames"] = [["#."] * 24, [".#"] * 24]
+        data["frame_times"] = [[2000, 2052], [2100, 2200]]
+        self.app.load_project(data)
+        self.app._refresh_preview()
+        self.assertEqual(self.app.frames, data["frames"])
+        self.assertEqual(self.app.audio_data, b"OggS test audio")
+        self.assertIsNotNone(self.app.plan)
+        self.assertEqual(self.app.plan["transition_ms"], 25)
+        self.assertEqual(str(self.app.export_button["state"]), "normal")
+
     def test_dialog_passes_custom_options_and_applies_audio_and_frames(self):
         result = video_result()
         self.open_video_dialog()

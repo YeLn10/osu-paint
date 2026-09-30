@@ -83,6 +83,14 @@ def compile_pattern(rows, start_ms, end_ms, scroll_speed=27, transition_ms=12):
     return compile_frames([rows], start_ms, end_ms, scroll_speed, transition_ms)
 
 
+def _stable_sweep_steps(time_range, height):
+    maximum_speed = 500 / 6 * 10
+    before = math.ceil((0.2 + 0.3 / height) * time_range / maximum_speed)
+    between = max(1, math.ceil(0.6 / height * time_range / maximum_speed))
+    after = math.ceil((0.3 + 0.3 / height) * time_range / maximum_speed)
+    return before, between, after
+
+
 def minimum_transition_ms(scroll_speed, target_client="lazer", height=1):
     if target_client not in ("lazer", "stable"):
         raise ValueError("目标客户端须为 lazer 或 stable。")
@@ -91,8 +99,10 @@ def minimum_transition_ms(scroll_speed, target_client="lazer", height=1):
     time_range = 11485 / scroll_speed * (658 / 643.2 if target_client == "lazer" else 1)
     # Maximum legal speed is 500 / 6 * 10. Round UP to avoid exceeding it.
     minimum = math.ceil(1.1 * time_range / (500 / 6 * 10) * 1000) / 1000
-    # Integer-millisecond notes need distinct row timestamps during the sweep.
-    return max(math.ceil(minimum), 2 * height) if target_client == "stable" else minimum
+    if target_client == "stable":
+        before, between, after = _stable_sweep_steps(time_range, height)
+        return before + (height - 1) * between + after
+    return minimum
 
 
 def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transition_ms=12,
@@ -141,6 +151,12 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
             raise ValueError(f"第 {i + 1} 帧需要有限的开始、结束时间，且结束 > 开始。")
     if target_client == "stable":
         frame_times = [(round(start), round(end)) for start, end in frame_times]
+        if timing_mode == "uniform":
+            # Derive each end from the rounded next start; independent ties-to-even
+            # rounding can otherwise shorten an odd-length transition by 1 ms.
+            frame_times = [(start, frame_times[i + 1][0] - transition_ms
+                            if i + 1 < len(frame_times) else end)
+                           for i, (start, end) in enumerate(frame_times)]
         if any(end - start < transition_ms + 2 for start, end in frame_times):
             raise ValueError(f"stable 每帧展示至少需要 {transition_ms + 2:g} ms；请降低 FPS、行数或延长展示。")
     for i, window in enumerate(frame_times):
@@ -149,10 +165,24 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
     start_ms, end_ms = frame_times[0][0], frame_times[-1][1]
     if start_ms - transition_ms < 100:
         raise ValueError("进场前至少保留 100 ms；请推迟第一帧开始时间。")
+    note_frames = list(range(len(frames)))
+    if target_client == "stable":
+        # Bound reuse drift to half a row beyond the initial reference-BPM segment.
+        slow_beat = max(6, 60000 - sum(math.ceil((end - start) / 50) for start, end in frame_times) * 0.01)
+        anchor_distance = (transition_ms + 1) * 0.01
+        reuse_distance = min(0.18 * time_range, anchor_distance + 0.3 * time_range / len(frames[0]))
+        for i in range(1, len(frames)):
+            gap = frame_times[i][0] - frame_times[i - 1][1]
+            hold = frame_times[i][1] - frame_times[note_frames[i - 1]][0]
+            distance = anchor_distance + max(0, hold - transition_ms - 1) * 500 / slow_beat * 0.01
+            if (frames[i] == frames[i - 1] and gap <= 2 * transition_ms + 1e-7
+                    and distance <= reuse_distance):
+                note_frames[i] = note_frames[i - 1]
     anchors = [min(transition_ms * 2, (end - start) / 2) if anchor_reference else 0
                for start, end in frame_times]
     if target_client == "stable":
-        anchors = [transition_ms + 1] * len(frame_times)
+        anchors = [transition_ms + 1 if index == first else 0
+                   for index, first in enumerate(note_frames)]
     counts = [math.ceil((end - start - anchor) / 50)
               for (start, end), anchor in zip(frame_times, anchors)]
     if 60000 - (sum(counts) - 1) * 0.01 < 6:
@@ -161,51 +191,99 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
     frame_plans = []
     slow_index = 0
     entry_start = start_ms - transition_ms
+    row_times = {}
+
+    def stable_exit(first, end, duration, hold_distance):
+        height = len(frames[0])
+        before, between, after = _stable_sweep_steps(time_range, height)
+        before += duration - minimum
+        # Place rows on the integer grid first; fit SV to their exact distances.
+        # Compensating the hold drift keeps the first row at its intended height.
+        distance = (0.2 + 0.3 / height) * time_range - hold_distance
+        beats = (5000 * before / distance, 5000 * between / (0.6 / height * time_range),
+                 5000 * after / ((0.3 + 0.3 / height) * time_range))
+        if not all(6 <= beat <= 60000 for beat in (beats if height > 1 else (beats[0], beats[2]))):
+            raise ValueError("stable 分段切帧超出合法 BPM 范围；请缩短切帧时长或展示时间。")
+        points.append(Point(end, beats[0], 10))
+        row_times[first] = [end + before + (height - 1 - row) * between for row in range(height)]
+        if height > 1:
+            points.append(Point(end + before, beats[1], 10))
+        points.append(Point(end + before + (height - 1) * between,
+                            beats[2], 10))
+
     for index, (rows, (start, end), count) in enumerate(zip(frames, frame_times, counts)):
         frame = {"pattern": rows, "start_ms": start, "end_ms": end,
                  "entry_start_ms": entry_start, "exit_end_ms": end + transition_ms}
         frame_plans.append(frame)
+        if index == note_frames[index]:
+            hold_distance = 0
         if anchors[index]:
             # Brief near-stationary 500 ms segments keep the reference BPM dominant
             # even when thousands of video transitions would otherwise outweigh the lead-in.
             points.append(Point(start, 500, 0.01))
+            hold_distance += anchors[index] * 0.01
         for i in range(count):
             # Keep values unique across ALL frames, not just within one hold.
             points.append(Point(start + anchors[index] + i * 50, 60000 - slow_index * 0.01, 0.01))
+            hold_distance += (min(50, end - points[-1].time) * 500 / points[-1].beat_length * 0.01)
             slow_index += 1
         if index == len(frames) - 1:
-            points.append(Point(end, fast_beat, 10))
+            if target_client == "stable":
+                stable_exit(note_frames[index], end, transition_ms, hold_distance)
+            else:
+                points.append(Point(end, fast_beat, 10))
         else:
             next_start = frame_times[index + 1][0]
             gap = next_start - end
+            if note_frames[index + 1] == note_frames[index]:
+                # Keep the same notes on stage instead of sweeping an identical picture.
+                hold_distance += gap * 500 / points[-1].beat_length * points[-1].sv
+                continue
             if gap > 2 * transition_ms + 1e-7:
                 # Clear the old frame now, then bring the next in at its own start.
-                points.extend([Point(end, fast_beat, 10), Point(end + transition_ms, 500, 1),
+                if target_client == "stable":
+                    stable_exit(note_frames[index], end, transition_ms, hold_distance)
+                else:
+                    points.append(Point(end, fast_beat, 10))
+                points.extend([Point(end + transition_ms, 500, 1),
                                Point(next_start - transition_ms, fast_beat, 10)])
                 entry_start = next_start - transition_ms
             else:
                 # Close neighbours share one sweep, as in the original equal-time mode.
-                points.append(Point(end, fast_beat, min(10, 10 * transition_ms / gap)))
+                if target_client == "stable":
+                    stable_exit(note_frames[index], end, gap, hold_distance)
+                else:
+                    points.append(Point(end, fast_beat, min(10, 10 * transition_ms / gap)))
                 frame["exit_end_ms"] = next_start
                 entry_start = end
     points.append(Point(end_ms + transition_ms, 500, 1))
     timeline = Timeline(points)
 
+    for index in range(len(frame_plans) - 2, -1, -1):
+        if note_frames[index] == note_frames[index + 1]:
+            frame_plans[index]["exit_end_ms"] = frame_plans[index + 1]["exit_end_ms"]
     notes = []
     for index, frame in enumerate(frame_plans):
-        drift = (timeline.position(frame["end_ms"]) - timeline.position(frame["start_ms"])) / time_range
+        first = note_frames[index]
+        if target_client == "stable":
+            frame["note_frame"] = first
+        frame["entry_start_ms"] = frame_plans[first]["entry_start_ms"]
+        drift = (timeline.position(frame["end_ms"]) - timeline.position(frame_plans[first]["start_ms"])) / time_range
         if drift >= 0.19:
             raise ValueError("展示时间过长，图案会接近判定线；请缩短时间范围。")
         frame["drift_playfield_fraction"] = drift
         frame["drift_at_658px"] = drift * 658
+        if index != first:
+            continue
         rows = frame["pattern"]
         for row, line in enumerate(rows):
             # Row centres occupy the middle 60%; row 0 is the TOP of the picture.
             y = 0.2 + (row + 0.5) * 0.6 / len(rows)
-            distance = timeline.position(frame["start_ms"]) + (1 - y) * time_range
-            time = timeline.time_at(distance)
             if target_client == "stable":
-                time = round(time)
+                time = row_times[index][row]
+            else:
+                distance = timeline.position(frame["start_ms"]) + (1 - y) * time_range
+                time = timeline.time_at(distance)
             for column, pixel in enumerate(line):
                 if pixel == "#":
                     notes.append({"frame": index, "column": column, "row": row, "time_ms": time, "y": y})
@@ -289,7 +367,8 @@ function draw(){let t=+seek.value,w=canvas.width/plan.keys;ctx.clearRect(0,0,360
 ctx.strokeStyle='#293047';for(let c=1;c<plan.keys;c++){ctx.beginPath();ctx.moveTo(c*w,0);ctx.lineTo(c*w,768);ctx.stroke();}
 const current=position(t),lower=current+(1-772/658)*plan.time_range_ms,upper=current+(1+4/658)*plan.time_range_ms;
 ctx.fillStyle='#80e0de';for(let i=lowerBound(notePositions,lower);i<plan.notes.length&&notePositions[i]<=upper;i++){const n=plan.notes[i];let y=(1-(notePositions[i]-current)/plan.time_range_ms)*658;ctx.fillRect(n.column*w+2,y-4,w-4,8);}
-const index=plan.frames.findIndex(f=>t>=f.start_ms&&t<=f.end_ms);
+const index=plan.frames.findIndex((f,i)=>t>=f.start_ms&&(t<=f.end_ms||
+    (i+1<plan.frames.length&&t<plan.frames[i+1].start_ms&&f.note_frame!==undefined&&f.note_frame===plan.frames[i+1].note_frame)));
 document.getElementById('pattern').textContent=index<0?'空档 / 进场 / 换帧 / 退场':plan.frames[index].pattern.join('\\n');
 ctx.fillStyle='white';ctx.fillRect(0,657,360,2);time.textContent=t.toFixed(2)+' ms'+(index<0?'':` · 第 ${index+1} 帧`);}
 let playing=false,last=0;document.getElementById('play').onclick=()=>{playing=!playing;if(playing&&+seek.value>=+seek.max)seek.value=seek.min;last=performance.now();};

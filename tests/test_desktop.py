@@ -132,6 +132,40 @@ class DesktopTests(unittest.TestCase):
         self.app._draw_preview()
         self.assertFalse(self.app.preview.find_withtag("note"))
 
+    def test_stable_repeated_picture_stays_visible_in_the_preview(self):
+        self.root.deiconify()
+        self.root.update()
+        picture = ["."] * 11 + ["#"] + ["."] * 12
+        self.app.frames = [picture] * 2
+        plan = compile_frames(self.app.frames, frame_times=[(2000, 2052), (2100, 2200)],
+                              fast_clear=True, target_client="stable")
+        self.app._refresh_preview(compiled_plan=plan)
+        for now in (2000, 2051, 2075, 2099, 2100, 2199):
+            self.app.seek_time.set(now)
+            self.app._draw_preview()
+            self.assertEqual(len(self.app.preview.find_withtag("note")), 1)
+            self.assertIn("帧", self.app.time_label.get())
+            self.assertNotIn("换帧", self.app.time_label.get())
+
+    def test_stable_changing_picture_uses_exact_rows_in_the_preview_at_ten_fps(self):
+        self.root.deiconify()
+        self.root.update()
+        self.app.frames = [["#."] * 24, [".#"] * 24]
+        plan = compile_frames(self.app.frames, frame_times=[(2000, 2075), (2100, 2200)],
+                              fast_clear=True, target_client="stable")
+        self.app._refresh_preview(compiled_plan=plan)
+        stage_h = (self.app.preview.winfo_height() - 34 * self.app.scale) * 658 / 768
+        for now in (2000, 2075, 2100, 2200):
+            self.app.seek_time.set(now)
+            self.app._draw_preview()
+            items = self.app.preview.find_withtag("note")
+            self.assertEqual(len(items), 24)
+            heights = sorted((sum(self.app.preview.coords(item)[1::2]) / 2 - 10 * self.app.scale) / stage_h
+                             for item in items)
+            for row, y in enumerate(heights):
+                self.assertAlmostEqual(y, .2 + (row + .5) * .6 / 24,
+                                       delta=plan["drift_playfield_fraction"] + 1e-6)
+
     def test_duplicate_is_independent_and_delete_selects_valid_frame(self):
         self.app.add_frame(duplicate=True)
         self.assertEqual(len(self.app.frames), 2)
