@@ -385,23 +385,13 @@ def write_output(plan, output, *, audio_data=None):
     settings_path = output / "播放设置.txt"
     if video.get("refresh_hz") is not None:
         settings_path.write_text(
-            "osu!lazer mania 刷新率排帧播放设置\n"
-            f"参考实际刷新率：{number(video['refresh_hz'])} Hz（不是整数游戏限帧值）\n"
-            f"视频采样帧率：{number(video['fps'])} FPS（请求 {number(video.get('requested_fps', video['fps']))} FPS）\n"
-            f"画面：{plan['keys']} 列 × {video['height']} 行（请求 {video.get('requested_height', video['height'])} 行）\n"
-            f"画面相位微调：{number(video.get('refresh_phase_ms', 0))} ms；音轨不移动。\n"
-            f"连续单键转长条：{'开启' if plan.get('merge_holds', False) else '关闭'}；不合并空格或不同画面。\n"
-            f"切帧预算：{number(plan['transition_ms'])} ms；最长有效快段："
-            f"{number(max(f['exit_end_ms'] - f['sweep_start_ms'] for f in plan['frames']))} ms。\n"
-            f"\n使用固定滚速 {number(plan['scroll_speed'])}、向下滚动与 NF；不要使用变速或改变列数的 Mod。\n"
-            "确认系统和游戏采用填写的实际刷新率；59.94 / 60000/1001 Hz 不等于 60 Hz。\n"
-            "可用 VSync 对齐显示刷新，但它不会把谱面／音频时钟锁到预设相位。\n"
-            "导入同目录中匹配屏幕比例的 pixel-film*.osk，音符高度已按本次画布行数生成；判定位置为 480。\n"
-            "按实际窗口比例选择皮肤，保留真实键数并铺满横向；游戏舞台缩放使用默认值。\n"
-            "原版 lazer 的 >9K 仍拆分，11/13/15/17K 会少一列；暂不提供客户端扩展。\n"
-            "长条外观受皮肤头、尾、身体贴图影响；预览仅验证位置，不模拟判定或 Miss 淡出。\n"
-            "转换器不会修改游戏或系统配置。未知相位、时钟抖动或刷新率不匹配仍可能采到切帧；\n"
-            "不能保证零残影。请按实际刷新率重新导入，必要时微调画面相位后实测。\n",
+            "osu!lazer 播放设置\n"
+            f"屏幕刷新率：{number(video['refresh_hz'])} Hz\n"
+            "已自动安排换帧；音轨不移动。\n"
+            f"使用固定滚速 {number(plan['scroll_speed'])}、向下滚动与 NF；不要使用变速或改变列数的 Mod。\n"
+            "游戏与系统使用填写的刷新率，舞台缩放保持默认值。\n"
+            "导入同目录中匹配屏幕比例的 pixel-film*.osk。\n"
+            "原版 lazer 的 >9K 仍拆分，11/13/15/17K 会少一列；暂不提供客户端扩展。\n",
             encoding="utf-8")
     elif settings_path.exists():
         settings_path.unlink()
@@ -413,7 +403,6 @@ def main():
     parser.add_argument("--video", action="store_true", help="导入视频及音轨，自动使用极速清场")
     parser.add_argument("--fps", type=float, default=10, help="视频每秒帧数，可填小数，默认 10")
     parser.add_argument("--refresh-hz", help="实际刷新率，支持 59.94 或 60000/1001；按整次刷新安排视频采样")
-    parser.add_argument("--refresh-phase-ms", type=float, default=0, help="画面相位微调，不移动音轨；须配合 --refresh-hz")
     parser.add_argument("--merge-holds", action="store_true", help="同一帧同列连续亮格转长条，不跨空格")
     parser.add_argument("--width", type=int, default=10, help="视频列数：1–18，默认 10")
     parser.add_argument("--height", type=int, default=24, help="视频画面高度 / 行，1–128，默认 24")
@@ -442,13 +431,13 @@ def main():
                                   start_ms=args.start_ms, scroll_speed=args.scroll_speed,
                                   threshold=args.threshold, brightness=args.brightness, contrast=args.contrast,
                                   invert=args.invert, fit=args.fit,
-                                  refresh_hz=refresh_hz, refresh_phase_ms=args.refresh_phase_ms,
+                                  refresh_hz=60 if refresh_hz is None else refresh_hz,
                                   merge_holds=args.merge_holds)
             plan = result["plan"]
             write_output(plan, args.output, audio_data=result["audio"])
         else:
-            if refresh_hz is not None or args.refresh_phase_ms:
-                raise ValueError("--refresh-hz 和 --refresh-phase-ms 仅可用于视频导入。")
+            if refresh_hz is not None:
+                raise ValueError("--refresh-hz 仅可用于视频导入。")
             if args.end_ms is None:
                 raise ValueError("文本图案需要 --end-ms。")
             frames = parse_frames(args.pattern.read_text(encoding="utf-8-sig"))

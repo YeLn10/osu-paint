@@ -271,7 +271,7 @@ class PaintApp:
                             "极速清场：自动用合法最高速度计算时长，覆盖手动切帧值；lazer 滚速 27 时约 0.671 ms。不能保证零过渡画面。\n\n"
                             "仅支持 lazer，使用小数音符时间；连续相同画面会在漂移预算内复用音符。\n"
                             "刷新率排帧：填写实际 Hz（支持 59.94、60000/1001），按整次刷新安排采样，避免取整时钟的长期错位。\n"
-                            "VSync 可同步显示刷新，但不会把谱面时钟锁相；相位微调只移动画面，不移动音轨。仍不能保证零残影。\n"
+                            "视频按填写的屏幕刷新率自动安排换帧，音轨保持原开始时间。\n"
                             "连续单键转长条：同一帧同列的连续亮格合并，不跨空格；头、身体、尾均使用不透明纯黑贴图。\n\n"
                             "游戏滚速：必须与游戏设置一致。它决定时间距离如何换算成舞台位置，不是动画帧率；"
                             "更改后会重新计算音符与变速点，不会改变你填写的展示时间。\n\n"
@@ -459,10 +459,10 @@ class PaintApp:
                 if video.get("reference_animation"):
                     raise ValueError("此项目使用已撤销的参考动画模式，请从原视频重新导入。")
                 # Old client choices and integer-FPS alignment are not playback modes.
-                video = {key: value for key, value in video.items() if key not in ("game_fps", "frame_fps")}
+                video = {key: value for key, value in video.items() if key not in ("game_fps", "frame_fps", "refresh_phase_ms")}
                 effective = resolve_video_options(fps=video["fps"], width=video["width"], height=video["height"],
                                                   start_ms=video["start_ms"], scroll_speed=float(data["settings"]["scroll_speed"]),
-                                                  refresh_hz=video.get("refresh_hz"), refresh_phase_ms=video.get("refresh_phase_ms", 0),
+                                                  refresh_hz=video.get("refresh_hz"),
                                                   merge_holds=merge_holds)
                 if video.get("refresh_hz") is not None and (
                         effective["height"] != video["height"] or not math.isclose(effective["fps"], video["fps"], abs_tol=1e-9)):
@@ -603,28 +603,16 @@ class PaintApp:
         refresh_entry = ttk.Spinbox(panel, textvariable=self.video_refresh_hz, from_=20, to=1000, width=12)
         refresh_entry.grid(row=11, column=1, pady=5)
         inputs.append(refresh_entry)
-        self.video_refresh_sync = tk.BooleanVar(value=True)
-        refresh_sync = ttk.Checkbutton(panel, text="按实际刷新率排帧", variable=self.video_refresh_sync)
-        refresh_sync.grid(row=12, column=0, columnspan=2, sticky="w", pady=5)
-        inputs.append(refresh_sync)
-        self.video_refresh_phase = tk.StringVar(value="0")
-        ttk.Label(panel, text="画面相位微调 / ms（音轨不移动）", style="Muted.TLabel").grid(row=13, column=0, sticky="w")
-        phase_entry = ttk.Entry(panel, textvariable=self.video_refresh_phase, width=12)
-        phase_entry.grid(row=13, column=1, pady=5)
-        inputs.append(phase_entry)
-        self.video_effective_label = tk.StringVar()
-        ttk.Label(panel, textvariable=self.video_effective_label, wraplength=480, style="Muted.TLabel").grid(
-            row=14, column=0, columnspan=2, sticky="w", pady=5)
         self.video_frame_index = tk.StringVar(value="1")
-        ttk.Label(panel, text="预览帧序号 / 从 1 开始", style="Muted.TLabel").grid(row=15, column=0, sticky="w", pady=(12, 0))
+        ttk.Label(panel, text="预览帧序号 / 从 1 开始", style="Muted.TLabel").grid(row=12, column=0, sticky="w", pady=(12, 0))
         frame_entry = ttk.Entry(panel, textvariable=self.video_frame_index, width=12)
-        frame_entry.grid(row=15, column=1, pady=(12, 0))
+        frame_entry.grid(row=12, column=1, pady=(12, 0))
         inputs.append(frame_entry)
         self.import_status = tk.StringVar(value="导入会替换当前画布；失败或取消时保留原项目。")
         ttk.Label(panel, textvariable=self.import_status, wraplength=480, style="Muted.TLabel").grid(
-            row=16, column=0, columnspan=2, sticky="w", pady=8)
+            row=13, column=0, columnspan=2, sticky="w", pady=8)
         buttons = ttk.Frame(panel)
-        buttons.grid(row=17, column=0, columnspan=2, sticky="e", pady=(8, 0))
+        buttons.grid(row=14, column=0, columnspan=2, sticky="e", pady=(8, 0))
 
         def request_options():
             options = {key: (int(variable.get()) if key in ("width", "height") else float(variable.get()))
@@ -633,40 +621,18 @@ class PaintApp:
             options.update(invert=self.video_invert.get(),
                            fit={"拉伸": "stretch", "等比留边": "contain", "等比裁剪": "cover"}[self.video_fit.get()],
                            merge_holds=self.video_merge_holds.get())
-            if self.video_refresh_sync.get():
-                try:
-                    options["refresh_hz"] = float(Fraction(self.video_refresh_hz.get()))
-                except (ValueError, ZeroDivisionError):
-                    raise ValueError("刷新率须为数字或分数，例如 59.94 或 60000/1001。") from None
-                options["refresh_phase_ms"] = float(self.video_refresh_phase.get())
+            try:
+                options["refresh_hz"] = float(Fraction(self.video_refresh_hz.get()))
+            except (ValueError, ZeroDivisionError):
+                raise ValueError("刷新率须为数字或分数，例如 59.94 或 60000/1001。") from None
             return options
-
-        def option_controls():
-            state = "normal" if self.video_refresh_sync.get() else "disabled"
-            refresh_entry.configure(state=state)
-            phase_entry.configure(state=state)
 
         def describe_options(*args):
             self.video_preview_label.set("参数或帧已修改，请点击预览刷新。")
-            if self.importing:
-                return
-            option_controls()
-            try:
-                requested = request_options()
-                effective = resolve_video_options(**requested)
-            except ValueError as error:
-                self.video_effective_label.set(f"参数无效：{error}")
-                return
-            text = f"实际导入：{effective['width']} × {effective['height']} 行 · {number(effective['fps'])} FPS"
-            if "refresh_hz" in requested:
-                text += (f"（请求 {requested['width']} × {requested['height']} 行 · {number(requested['fps'])} FPS）\n"
-                         f"参考 {number(requested['refresh_hz'])} Hz；请匹配实际刷新率，未知相位不能保证零残影。")
-            self.video_effective_label.set(text)
 
         for variable in [*self.video_fields.values(), self.video_invert, self.video_fit, self.video_frame_index,
-                         self.video_refresh_hz, self.video_refresh_sync, self.video_refresh_phase, self.video_merge_holds]:
+                         self.video_refresh_hz, self.video_merge_holds]:
             variable.trace_add("write", describe_options)
-        self.video_option_controls = option_controls
 
         def cancel():
             if self.importing:
@@ -768,14 +734,12 @@ class PaintApp:
                 self.import_status.set("预览完成。可调整参数、选择其他帧，或导入整个视频。")
                 for entry in self.video_inputs:
                     entry.configure(state="readonly" if isinstance(entry, ttk.Combobox) else "normal")
-                self.video_option_controls()
                 self.video_start_button.configure(state="normal")
                 self.video_preview_button.configure(state="normal")
                 continue
             if error is not None and not isinstance(error, ImportCancelled):
                 for entry in self.video_inputs:
                     entry.configure(state="readonly" if isinstance(entry, ttk.Combobox) else "normal")
-                self.video_option_controls()
                 self.video_start_button.configure(state="normal")
                 self.video_preview_button.configure(state="normal")
                 self.video_cancel_button.configure(state="normal")
@@ -789,8 +753,7 @@ class PaintApp:
                 else:
                     self._apply_video(result)
                     audio = "音乐已导入，导出时会打包进谱面" if self.audio_data is not None else "视频没有音轨，导出使用静音"
-                    self._status(f"已导入 {len(self.frames)} 帧 · {number(self.video['fps'])} FPS · "
-                                 f"{self.video['width']} × {self.video['height']} · {audio}。请保存 JSON 项目保留音轨。")
+                    self._status(f"视频导入完成，{audio}。请保存 JSON 项目保留音轨。")
 
     def edit_text(self):
         dialog = tk.Toplevel(self.root)
@@ -879,9 +842,7 @@ class PaintApp:
             self._status(f"{self.plan['keys']}K · {len(self.frames)} 帧 · {len(self.plan['notes'])} 音符 · "
                          f"{'极速' if self.fast_clear.get() else ''}切帧 {self.plan['transition_ms']:.3f} ms · "
                          f"单帧最大预计漂移 {self.plan['drift_at_768px']:.4f} px / 768 px"
-                         + (" · 已带视频音轨" if self.audio_data is not None else "")
-                         + (f" · 参考 {number(self.video['refresh_hz'])} Hz / 相位 {number(self.video.get('refresh_phase_ms', 0))} ms"
-                            if self.video is not None and self.video.get("refresh_hz") is not None else ""))
+                         + (" · 已带视频音轨" if self.audio_data is not None else ""))
         state = "normal" if self.plan is not None else "disabled"
         self.play_button.configure(state=state)
         self.seek.configure(state=state)

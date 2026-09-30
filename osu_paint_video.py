@@ -20,7 +20,7 @@ class ImportCancelled(Exception):
 
 def resolve_video_options(*, fps, width, height, start_ms, scroll_speed,
                           threshold=128, brightness=0, contrast=1, invert=False, fit="stretch",
-                          refresh_hz=None, refresh_phase_ms=0, merge_holds=False):
+                          refresh_hz=None, merge_holds=False):
     if not math.isfinite(fps) or not 0 < fps <= 60:
         raise ValueError("视频 FPS 须大于 0 且不超过 60，可以填写小数。")
     if not isinstance(height, int) or not 1 <= height <= 128:
@@ -30,11 +30,6 @@ def resolve_video_options(*, fps, width, height, start_ms, scroll_speed,
     if refresh_hz is not None:
         if isinstance(refresh_hz, bool) or not math.isfinite(refresh_hz) or not 20 <= refresh_hz <= 1000:
             raise ValueError("实际刷新率须为 20–1000 Hz，可填写小数。")
-    if not math.isfinite(refresh_phase_ms):
-        raise ValueError("画面相位偏移必须是有限数值。")
-    if refresh_phase_ms and (refresh_hz is None or abs(refresh_phase_ms) > 1000 / refresh_hz):
-        raise ValueError("画面相位偏移须在正负一个刷新周期内，并启用刷新率排帧。")
-    if refresh_hz is not None:
         divisor = max(math.ceil(refresh_hz / 60), 1, round(refresh_hz / fps))
         fps = refresh_hz / divisor
         if minimum_transition_ms(scroll_speed) >= 1000 / refresh_hz:
@@ -43,10 +38,7 @@ def resolve_video_options(*, fps, width, height, start_ms, scroll_speed,
                    threshold=threshold, brightness=brightness,
                    contrast=contrast, invert=invert, fit=fit)
     _validate_video_options(**options)
-    if start_ms + refresh_phase_ms - minimum_transition_ms(scroll_speed) < 100:
-        raise ValueError("画面相位调整后，进场前仍须保留至少 100 ms。")
-    options.update(refresh_hz=refresh_hz, refresh_phase_ms=refresh_phase_ms,
-                   merge_holds=merge_holds)
+    options.update(refresh_hz=refresh_hz, merge_holds=merge_holds)
     return options
 
 
@@ -97,11 +89,11 @@ def _pixel_frame(block, width, *, threshold=128, brightness=0, contrast=1, inver
 def preview_video_frame(path, *, frame_index=0, fps=10, width=10, height=24, start_ms=2000,
                         scroll_speed=27, threshold=128, brightness=0,
                         contrast=1, invert=False, fit="stretch", cancel=None,
-                        refresh_hz=None, refresh_phase_ms=0, merge_holds=False):
+                        refresh_hz=None, merge_holds=False):
     resolved = resolve_video_options(fps=fps, width=width, height=height, start_ms=start_ms,
                                      scroll_speed=scroll_speed, threshold=threshold,
                                      brightness=brightness, contrast=contrast, invert=invert, fit=fit,
-                                     refresh_hz=refresh_hz, refresh_phase_ms=refresh_phase_ms, merge_holds=merge_holds)
+                                     refresh_hz=refresh_hz, merge_holds=merge_holds)
     fps, height = resolved["fps"], resolved["height"]
     if not isinstance(frame_index, int) or not 0 <= frame_index < MAX_VIDEO_FRAMES:
         raise ValueError(f"预览帧序号须在 1–{MAX_VIDEO_FRAMES} 之间。")
@@ -162,13 +154,13 @@ def _run_ffmpeg(arguments, cancel):
 def import_video(path, *, fps=10, width=10, height=24, start_ms=2000, scroll_speed=27,
                  progress=None, cancel=None, threshold=128, brightness=0,
                  contrast=1, invert=False, fit="stretch",
-                 refresh_hz=None, refresh_phase_ms=0, merge_holds=False):
+                 refresh_hz=None, merge_holds=False):
     requested_fps, requested_height = fps, height
     resolved = resolve_video_options(fps=fps, width=width, height=height,
                                      start_ms=start_ms, scroll_speed=scroll_speed,
                                      threshold=threshold, brightness=brightness, contrast=contrast,
                                      invert=invert, fit=fit,
-                                     refresh_hz=refresh_hz, refresh_phase_ms=refresh_phase_ms, merge_holds=merge_holds)
+                                     refresh_hz=refresh_hz, merge_holds=merge_holds)
     fps, height = resolved["fps"], resolved["height"]
     transition = minimum_transition_ms(scroll_speed)
     path = Path(path).expanduser().resolve()
@@ -210,7 +202,7 @@ def import_video(path, *, fps=10, width=10, height=24, start_ms=2000, scroll_spe
         period_exact = (Fraction(1000) / Fraction(str(fps)) if refresh_hz is None else
                         Fraction(1000 * round(refresh_hz / fps)) / Fraction(str(refresh_hz)))
         period = float(period_exact)
-        origin = Fraction(str(start_ms)) + Fraction(str(refresh_phase_ms))
+        origin = Fraction(str(start_ms))
         if refresh_hz is None:
             starts = [float(origin + i * period_exact) for i in range(count + 1)]
             windows = [(starts[i], starts[i + 1] - (transition if i < count - 1 else 0))
@@ -243,8 +235,6 @@ def import_video(path, *, fps=10, width=10, height=24, start_ms=2000, scroll_spe
              "start_ms": start_ms, "duration_ms": count * period,
              "threshold": threshold, "brightness": brightness, "contrast": contrast, "invert": invert, "fit": fit}
     if refresh_hz is not None:
-        video.update(refresh_hz=refresh_hz, refresh_phase_ms=refresh_phase_ms)
-    if refresh_hz is not None:
-        video.update(requested_fps=requested_fps, requested_height=requested_height)
+        video.update(refresh_hz=refresh_hz, requested_fps=requested_fps, requested_height=requested_height)
     plan["video"] = video.copy()
     return {"plan": plan, "audio": audio_data, "video": video}

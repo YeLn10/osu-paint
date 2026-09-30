@@ -301,8 +301,7 @@ class ExportTests(unittest.TestCase):
             output = Path(directory)
             write_output(plan, output)
             settings = (output / "播放设置.txt").read_text(encoding="utf-8")
-            for value in ("60 Hz", "30 FPS", "请求 50 FPS", "18 列 × 13 行", "请求 24 行",
-                          "固定滚速 27", "NF", "相位微调"):
+            for value in ("60 Hz", "固定滚速 27", "NF", "自动安排换帧"):
                 self.assertIn(value, settings)
             with zipfile.ZipFile(output / "pattern.osz") as archive:
                 self.assertNotIn("播放设置.txt", archive.namelist())

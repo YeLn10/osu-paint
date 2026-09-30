@@ -144,24 +144,23 @@ class VideoImportTests(unittest.TestCase):
             self.assertIn("Keys: 16", skin.read("skin.ini").decode())
 
 
-    def test_fractional_refresh_phase_and_holds_share_real_preview_and_preserve_audio(self):
+    def test_automatic_fractional_refresh_and_holds_share_real_preview_and_preserve_audio(self):
         client = "lazer"
         with self.subTest(client=client):
             options = dict(fps=20, width=2, height=4, refresh_hz=60000 / 1001,
                            merge_holds=True)
             base = self.load(**options)
-            shifted = self.load(**options, refresh_phase_ms=5)
+            repeated = self.load(**options)
             # Ogg stream serials/CRCs vary across encodes; compare the decoded signal.
             pcm_args = ["-i", "pipe:0", "-ac", "1", "-ar", "48000", "-f", "f32le", "pipe:1"]
-            self.assertEqual(self.ffmpeg(pcm_args, input=shifted["audio"]),
+            self.assertEqual(self.ffmpeg(pcm_args, input=repeated["audio"]),
                              self.ffmpeg(pcm_args, input=base["audio"]))
-            self.assertEqual(shifted["video"]["start_ms"], 2000)
-            for before, after in zip(base["plan"]["frames"], shifted["plan"]["frames"]):
-                self.assertAlmostEqual(after["start_ms"] - before["start_ms"], 5)
-            preview = preview_video_frame(self.source, **options, refresh_phase_ms=5, frame_index=10)
-            self.assertEqual(preview["frame"], shifted["plan"]["frames"][10]["pattern"])
-            self.assertTrue(any("end_time_ms" in n for n in shifted["plan"]["notes"]))
-            self.assertTrue(shifted["audio"].startswith(b"OggS"))
+            self.assertEqual(repeated["video"]["start_ms"], 2000)
+            self.assertEqual(base["plan"], repeated["plan"])
+            preview = preview_video_frame(self.source, **options, frame_index=10)
+            self.assertEqual(preview["frame"], repeated["plan"]["frames"][10]["pattern"])
+            self.assertTrue(any("end_time_ms" in n for n in repeated["plan"]["notes"]))
+            self.assertTrue(repeated["audio"].startswith(b"OggS"))
 
 
     def test_audio_includes_import_offset_and_original_stream_delay(self):

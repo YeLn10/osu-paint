@@ -80,17 +80,54 @@ class HoldNoteTests(unittest.TestCase):
 
 
 class RefreshClockTests(unittest.TestCase):
+    def test_automatic_schedule_covers_60_120_165_hz_and_fractional_start_times(self):
+        for hz in (60, 120, 165):
+            for start in (2000, 2000.6, 1730.42):
+                with self.subTest(hz=hz, start=start):
+                    plan = synthetic_video(count=12, refresh_hz=hz, start_ms=start)["plan"]
+                    frames = plan["frames"]
+                    self.assertEqual(plan["start_ms"], start)
+                    divisor = round(hz / plan["video"]["fps"])
+                    for tick in range(12 * divisor):
+                        now = start + tick * 1000 / hz
+                        frame = frames[tick // divisor]
+                        self.assertLessEqual(frame["start_ms"], now + 1e-7)
+                        self.assertGreaterEqual(frame["end_ms"], now - 1e-7)
+                    for before, after in zip(frames, frames[1:]):
+                        middle = (before["end_ms"] + after["start_ms"]) / 2
+                        refresh_index = math.floor((middle - start) / (1000 / hz))
+                        self.assertAlmostEqual(middle, start + (refresh_index + .5) * 1000 / hz,
+                                               delta=1e-6)
+
+    def test_an_unknown_presentation_phase_can_still_sample_a_real_transition(self):
+        # A reproducible counterexample to a zero-ghosting guarantee based only on Hz/start.
+        from test_osu_paint import decode, position
+        for hz in (60, 120, 165):
+            plan = synthetic_video(count=6, refresh_hz=hz)["plan"]
+            points, _ = decode(encode_osu(plan))
+            before, after = plan["frames"][:2]
+            now = (before["end_ms"] + after["start_ms"]) / 2
+            phase = (now - plan["start_ms"]) % (1000 / hz)
+            self.assertGreater(phase, 0)
+            self.assertLess(phase, 1000 / hz)
+            current = position(points, now, plan["time_range_ms"])
+            visible_columns = set()
+            for note in plan["notes"]:
+                bottom = 1 - position(points, note["time_ms"], plan["time_range_ms"]) + current
+                if 0 < bottom and bottom - 1 / 3 < 1:
+                    visible_columns.add(note["column"])
+            self.assertEqual(visible_columns, {0, 1})
+
     def test_fractional_refresh_preserves_requested_height_on_lazer(self):
         options = resolve_video_options(fps=60, width=10, height=24, start_ms=2000,
                                         scroll_speed=27, refresh_hz=59.94)
         self.assertEqual(options["height"], 24)
         self.assertAlmostEqual(options["fps"], 59.94)
 
-    def test_invalid_refresh_rates_and_phase_offsets_are_rejected(self):
+    def test_invalid_refresh_rates_are_rejected(self):
         base = dict(fps=20, width=2, height=3, start_ms=2000, scroll_speed=27)
         for options in (dict(refresh_hz=math.nan), dict(refresh_hz=math.inf), dict(refresh_hz=True),
-                        dict(refresh_hz=19), dict(refresh_hz=1001), dict(refresh_phase_ms=1),
-                        dict(refresh_hz=60, refresh_phase_ms=17), dict(refresh_hz=60, refresh_phase_ms=math.nan),
+                        dict(refresh_hz=19), dict(refresh_hz=1001),
                         dict(refresh_hz=100, scroll_speed=1), dict(merge_holds=1)):
             with self.subTest(options=options), self.assertRaises(ValueError):
                 resolve_video_options(**(base | options))
@@ -175,11 +212,11 @@ class RefreshClockTests(unittest.TestCase):
                     if merged:
                         self.assertAlmostEqual(1 - (tails[visible[0]] - current), 1 / 3 - inset, delta=1e-4)
 
-    def test_refresh_phase_moves_pictures_not_the_audio_offset(self):
-        result = synthetic_video(count=6, refresh_hz=60, refresh_phase_ms=5)
-        self.assertEqual(result["plan"]["start_ms"], 2005)
+    def test_automatic_alignment_keeps_the_first_picture_and_audio_at_the_requested_start(self):
+        result = synthetic_video(count=6, refresh_hz=60)
+        self.assertEqual(result["plan"]["start_ms"], 2000)
         self.assertEqual(result["video"]["start_ms"], 2000)
-        self.assertEqual(result["video"]["refresh_phase_ms"], 5)
+        self.assertNotIn("refresh_phase_ms", result["video"])
 
 
 class RefreshExportTests(unittest.TestCase):
@@ -208,21 +245,19 @@ for(let i=0;i<SAMPLES.length;i++){
                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_refresh_settings_export_actual_rate_phase_and_hold_choice(self):
+    def test_playback_settings_are_short_and_do_not_expose_phase_or_conversion_details(self):
         client = "lazer"
         with self.subTest(client=client), tempfile.TemporaryDirectory() as directory:
-            plan = synthetic_video(count=6, refresh_hz=60000 / 1001,
-                                   refresh_phase_ms=5, merge_holds=True)["plan"]
+            plan = synthetic_video(count=6, refresh_hz=60000 / 1001, merge_holds=True)["plan"]
             output = Path(directory)
             write_output(plan, output)
             settings = (output / "播放设置.txt").read_text(encoding="utf-8")
             self.assertIn(client, settings)
             self.assertIn("59.94005994", settings)
-            self.assertIn("相位", settings)
-            self.assertIn("5 ms", settings)
+            self.assertNotIn("相位", settings)
+            self.assertNotIn("FPS", settings)
             self.assertIn("音轨不移动", settings)
-            self.assertIn("长条", settings)
-            self.assertIn("不能保证零残影", settings)
+            self.assertIn("自动安排", settings)
             self.assertNotIn("CustomFrameLimit", settings)
             plain = compile_frames([["#"]], 2000, 2100, fast_clear=True)
             write_output(plain, output)
@@ -244,17 +279,17 @@ for(let i=0;i<SAMPLES.length;i++){
                 objects = (output / "pattern.osu").read_text(encoding="utf-8").split("[HitObjects]\n")[1].splitlines()
                 self.assertTrue(all(line.split(",")[3] == ("128" if flags else "1") for line in objects))
 
-    def test_cli_accepts_fractional_refresh_and_passes_phase_and_hold_switch(self):
+    def test_cli_accepts_fractional_refresh_and_automatically_aligns_with_holds(self):
         with tempfile.TemporaryDirectory() as directory:
-            result = synthetic_video(count=6, refresh_hz=60000 / 1001, refresh_phase_ms=-2, merge_holds=True)
+            result = synthetic_video(count=6, refresh_hz=60000 / 1001, merge_holds=True)
             args = ["osu_paint.py", "local.mp4", "--video", "--start-ms", "2000",
-                    "--refresh-hz", "60000/1001", "--refresh-phase-ms", "-2", "--merge-holds",
+                    "--refresh-hz", "60000/1001", "--merge-holds",
                     "--output", directory]
             with patch.object(sys, "argv", args), redirect_stdout(io.StringIO()), \
                     patch("osu_paint_video.import_video", return_value=result) as importer:
                 main()
             self.assertAlmostEqual(importer.call_args.kwargs["refresh_hz"], 60000 / 1001)
-            self.assertEqual(importer.call_args.kwargs["refresh_phase_ms"], -2)
+            self.assertNotIn("refresh_phase_ms", importer.call_args.kwargs)
             self.assertTrue(importer.call_args.kwargs["merge_holds"])
             self.assertTrue((Path(directory) / "pattern.osz").is_file())
 

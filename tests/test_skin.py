@@ -91,8 +91,30 @@ class SkinTests(unittest.TestCase):
                         name = section[f"NoteImage{column}{suffix}"] + ".png"
                         width, height, pixels = png_pixels(self.archive.read(name))
                         self.assertEqual(width, 40)
-                        self.assertEqual(height, 1 if suffix == "L" else 40)
+                        self.assertEqual(height, 1024 if suffix == "L" else 40)
                         self.assertEqual(pixels, b"\x00\x00\x00\xff" * width * height)
+
+    def test_stretched_body_stays_black_after_lazer_atlas_and_linear_sampling(self):
+        # Reproduced against osu.Framework bundled with lazer 2026.921.0:
+        # its 1024px atlas reserves 24px per edge and skips pure-black borders.
+        # A one-row sprite therefore blends with transparent padding when stretched.
+        for filename in SKIN_PROFILES:
+            with zipfile.ZipFile(ROOT / filename) as skin:
+                width, height, pixels = png_pixels(skin.read("pixel-body.png"))
+            standalone = width > 1024 - 48 or height > 1024 - 48
+            for v in (0, .1, .25, .5, .75, .9, 1):
+                coordinate = v * height - .5
+                lower = int(coordinate // 1)
+                fraction = coordinate - lower
+
+                def alpha(row):
+                    if not standalone and not 0 <= row < height:
+                        return 0  # Actual atlas omits the black edge upload.
+                    row = min(height - 1, max(0, row))
+                    return pixels[(row * width + width // 2) * 4 + 3]
+
+                sampled = alpha(lower) * (1 - fraction) + alpha(lower + 1) * fraction
+                self.assertEqual(sampled, 255, (filename, v, "white background reveals grey"))
 
     def test_judgement_position_matches_lazer_compiler(self):
         for keys, section in self.sections.items():
