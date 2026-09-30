@@ -7,7 +7,7 @@ import unittest
 import zipfile
 import zlib
 
-from tools.build_skin import build_skin
+from osu_paint_skin import SKIN_PROFILES, build_skin
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -62,19 +62,19 @@ class SkinTests(unittest.TestCase):
             self.archive.read("skin.ini").decode("utf-8-sig"))
 
     def test_every_key_count_has_its_own_configuration(self):
-        self.assertEqual(set(self.sections), set(range(1, 17)))
-        self.assertEqual(self.section_count, 16)
+        self.assertEqual(set(self.sections), set(range(1, 19)))
+        self.assertEqual(self.section_count, 18)
         for keys, section in self.sections.items():
             with self.subTest(keys=keys):
                 for option, length in (("ColumnWidth", keys), ("ColumnSpacing", keys - 1),
                                        ("ColumnLineWidth", keys + 1)):
                     values = [float(value) for value in section[option].split(",") if value]
                     self.assertEqual(len(values), length)
-                    self.assertTrue(all(value == (40 if option == "ColumnWidth" else 0)
-                                        for value in values))
+                    expected = min(768 / keys, 100) if option == "ColumnWidth" else 0
+                    self.assertTrue(all(abs(value - expected) < 1e-8 for value in values))
 
     def test_high_key_counts_use_one_continuous_stage(self):
-        for keys in range(10, 17):
+        for keys in range(10, 19):
             with self.subTest(keys=keys):
                 section = self.sections.get(keys, {})
                 # Missing SplitStages falls back to the client's >9K split layout.
@@ -98,8 +98,8 @@ class SkinTests(unittest.TestCase):
     def test_judgement_position_matches_stable_compiler_baseline(self):
         for keys, section in self.sections.items():
             with self.subTest(keys=keys):
-                self.assertEqual(section["HitPosition"], "402")
-                self.assertEqual(section["WidthForNoteHeightScale"], "40")
+                self.assertEqual(section["HitPosition"], "480")
+                self.assertEqual(section["WidthForNoteHeightScale"], "20")
                 self.assertEqual(section["UpsideDown"], "0")
                 self.assertEqual(section["NoteBodyStyle"], "0")
 
@@ -116,8 +116,20 @@ class SkinTests(unittest.TestCase):
 
     def test_delivered_archive_is_reproducible_from_source(self):
         with tempfile.TemporaryDirectory() as directory:
-            rebuilt = build_skin(Path(directory) / "pixel-film.osk")
-            self.assertEqual(rebuilt.read_bytes(), (ROOT / "pixel-film.osk").read_bytes())
+            for filename, (ratio, label) in SKIN_PROFILES.items():
+                with self.subTest(profile=filename):
+                    rebuilt = build_skin(Path(directory) / filename, aspect_ratio=ratio, label=label)
+                    self.assertEqual(rebuilt.read_bytes(), (ROOT / filename).read_bytes())
+
+    def test_all_profiles_fill_the_available_width_without_changing_key_counts(self):
+        for filename, (ratio, _) in SKIN_PROFILES.items():
+            with zipfile.ZipFile(ROOT / filename) as archive:
+                sections, _ = mania_sections(archive.read("skin.ini").decode())
+            for keys in range(1, 19):
+                with self.subTest(profile=filename, keys=keys):
+                    width = float(sections[keys]["ColumnWidth"].split(",")[0])
+                    self.assertAlmostEqual(width * keys, min(480 * ratio, keys * 100), delta=1e-7)
+                    self.assertLessEqual(width, 100)
 
 
 if __name__ == "__main__":

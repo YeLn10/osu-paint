@@ -2,7 +2,7 @@
 
 ## 用途与范围
 
-将 `#` / `.` 像素帧或本地视频编译为 osu!mania 音符与 BPM/SV 控制点，在指定时间窗口近似静止展示，再快速进出场。应用支持 1–18 列，桌面端与 CLI 共用生成逻辑。Pixel Film 是独立的 1–16K 皮肤，不改变谱面的键数或时间。
+将 `#` / `.` 像素帧或本地视频编译为 osu!mania 音符与 BPM/SV 控制点，在指定时间窗口近似静止展示，再快速进出场。应用支持 1–18 列，桌面端与 CLI 共用生成逻辑。配套 Pixel Film 皮肤支持 1–18K，默认比例为 3072×1920 对应的 16:10；各比例与宽度限制见 [皮肤说明](skin.md)。
 
 ## 模块与依赖
 
@@ -13,7 +13,8 @@
 | `osu_paint_audio.py` | 桌面音乐播放、定位与设备生命周期 | 按需加载 pygame / mutagen；不参与谱面编译 |
 | `osu_paint_desktop.py` | Tk 编辑、项目保存与打开、预览、异步导入与导出 | 调用以上模块；主线程管理控件与项目状态 |
 | `osu-paint.pyw` | 无终端窗口的桌面入口 | 仅启动桌面端 |
-| `tools/build_skin.py` | 生成皮肤配置、PNG 与 `.osk` | 独立标准库脚本；不打包到应用 |
+| `osu_paint_skin.py` | 生成各比例的皮肤配置、PNG 与 `.osk` | 只用标准库；由导出与构建脚本共用 |
+| `tools/build_skin.py` | 重建根目录交付皮肤，可指定行数 | 调用皮肤模块；默认 24 行 |
 
 ```mermaid
 flowchart LR
@@ -23,10 +24,11 @@ flowchart LR
     FFmpeg --> Ogg[Ogg 音轨]
     Core --> Plan[编译计划]
     Plan --> Export[osu / osz / 报告 / HTML]
+    SkinBuild[osu_paint_skin] --> Export
     Ogg --> Export
     Plan --> Tk[Tk 连续位置预览]
     Ogg --> Audio[osu_paint_audio]
-    SkinBuild[build_skin] --> Skin[pixel-film.osk]
+    SkinBuild --> Skin[pixel-film*.osk]
     Export --> Game[osu 客户端]
     Skin --> Game
 ```
@@ -35,9 +37,9 @@ flowchart LR
 
 1. `parse_frames` 产生同尺寸的字符串行数组；`---` 分帧。编辑项目可含空白帧，普通图案导出要求每帧有亮格；视频允许黑场，但整段必须有音符。
 2. `compile_frames` 验证均分 / 自由时间窗口、滚速、客户端与长条开关，生成帧窗口、`Point(time, beat_length, sv)` 和音符数组。
-3. `Timeline` 对分段速度积分，并反求给定位置对应的时间；音符行中心位于判定线上方区域的 20%–80%。返回的计划包含参数、实际窗口、漂移、控制点和音符，是导出与预览的共同输入。
+3. `Timeline` 对分段速度积分，并反求给定位置对应的时间；H 行的中心为 `(row + 0.5) / H`，覆盖完整上下范围。判定位置为 480，时间范围为 `11485 / scrollSpeed × 480 / 402`，漂移按 768 内部像素高度报告。返回的计划包含参数、实际窗口、漂移、控制点和音符，是导出与预览的共同输入。
 4. `encode_osu` 用列中心映射 `.osu` 的 0–512 横坐标。短音符为 type 1，长条为 type 128；红线后立即写对应绿线，防止红线重置继承速度。
-5. `write_output` 写独立谱面、音频、报告和预览；`.osz` 只包含谱面与对应音频。刷新率 / 旧 FPS 排帧项目另写播放说明。
+5. `write_output` 写独立谱面、音频、报告、预览和五种屏幕比例的 `.osk`，音符高度为 `480 / H` 皮肤单位。`.osz` 只包含谱面与对应音频；皮肤需单独导入并按游戏窗口比例选择。刷新率 / 旧 FPS 排帧项目另写播放说明。
 
 stable 按整数毫秒布置音符头尾，用分段 SV 拟合行中心；lazer 使用小数时间与自身参考 BPM / 滚速模型。两者不能共用一套舍入规则。长条从连续亮格的底部行起头、顶部行结束，不跨空格或不同画面。相邻相同画面可在漂移预算内共用音符。
 
@@ -55,10 +57,10 @@ stable 按整数毫秒布置音符头尾，用分段 SV 拟合行中心；lazer 
 
 `tests/` 覆盖纯编译、实际 `.osu` 重新解析积分、Node 执行 HTML 绘制、Tk 编辑与快照、合成媒体的真实 FFmpeg 解码、Ogg 播放及皮肤包资源。测试使用合成输入，不依赖个人视频或联网。
 
-桌面与 HTML 预览只模拟连续几何位置，不模拟皮肤、判定、Miss 淡出或显示刷新。刷新窗口验证使用指定频率与相位，不代表实机已经锁相。当前皮肤修复与客户端差异见 [皮肤说明](skin.md)；时间策略证据见 [刷新约束](research/render-phase-constraints.md) 与 [stable 兼容记录](research/stable-compatibility.md)。
+桌面与 HTML 预览按默认 16:10 比例绘制连续几何位置，黑块高度覆盖每行，低键数遵守配套皮肤的最大列宽；不模拟判定、Miss 淡出或显示刷新。刷新窗口验证使用指定频率与相位，不代表实机已经锁相。当前皮肤修复与客户端差异见 [皮肤说明](skin.md)；时间策略证据见 [刷新约束](research/render-phase-constraints.md) 与 [stable 兼容记录](research/stable-compatibility.md)。
 
 ## 文件管理
 
-Git 管理源码、文档、回归测试、示例、构建脚本和 `pixel-film.osk`。皮肤包是特意保留的交付文件，必须可从脚本复现。`.build-env/` 是本地构建环境；`build/` 与 `__pycache__/` 是可清理缓存；`dist/` 保存可直接运行的 EXE；`output/` 与根目录 `.osz` 是本地导出，不进入版本库。
+Git 管理源码、文档、回归测试、示例、构建脚本和五个 `pixel-film*.osk`。皮肤包是特意保留的交付文件，必须可从脚本复现。`.build-env/` 是本地构建环境；`build/` 与 `__pycache__/` 是可清理缓存；`dist/` 保存可直接运行的 EXE；`output/` 与根目录 `.osz` 是本地导出，不进入版本库。
 
 历史研究记录中的 `build/`、`output/` 路径是当次诊断位置，清理缓存后可能不存在。保留研究结论与版本依据；缓存是否仍在不代表功能是否支持。清理范围由用户确认，项目 JSON 与音轨不能仅凭目录名称判为冗余。

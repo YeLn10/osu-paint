@@ -182,17 +182,17 @@ class RefreshClockTests(unittest.TestCase):
                     for tick in range(2400 * 3):
                         now = 2000 + tick * 1000 / refresh
                         current = position(now)
-                        first = bisect_right(heads, current + 1 - 768 / 658 - span)
+                        first = bisect_right(heads, current - span)
                         last = bisect_right(heads, current + 1)
                         visible = [i for i in range(first, last)
-                                   if heads[i] <= current + 1 and tails[i] >= current + 1 - 768 / 658]
+                                   if heads[i] <= current + 1 and tails[i] >= current]
                         self.assertEqual(len(visible), 1 if merged else 3, (client, tick))
                         self.assertEqual({int(int(objects[i][0]) * 2 / 512) for i in visible}, {tick // 3 % 2})
-                        expected = [0.7] if merged else [0.3, 0.5, 0.7]
+                        expected = [5 / 6] if merged else [1 / 6, .5, 5 / 6]
                         for y, wanted in zip(sorted(1 - (heads[i] - current) for i in visible), expected):
                             self.assertAlmostEqual(y, wanted, delta=1e-4)
                         if merged:
-                            self.assertAlmostEqual(1 - (tails[visible[0]] - current), 0.3, delta=1e-4)
+                            self.assertAlmostEqual(1 - (tails[visible[0]] - current), 1 / 6, delta=1e-4)
 
     def test_refresh_phase_moves_pictures_not_the_audio_offset(self):
         result = synthetic_video(count=6, refresh_hz=60, refresh_phase_ms=5)
@@ -212,7 +212,7 @@ class RefreshExportTests(unittest.TestCase):
         harness = r"""
 const vm=require('node:vm'),assert=require('node:assert/strict'),rects=[];
 const ctx={clearRect(){rects.length=0;},beginPath(){},moveTo(){},lineTo(){},stroke(){},
-fillRect(x,y,w,h){if(this.fillStyle==='#80e0de')rects.push([x,y,w,h]);}};
+fillRect(x,y,w,h){if(this.fillStyle==='black')rects.push([x,y,w,h]);}};
 const elements={view:{width:360,height:768,getContext:()=>ctx},seek:{},time:{},info:{},pattern:{},play:{}};
 const sandbox=vm.createContext({document:{getElementById:id=>elements[id]},requestAnimationFrame(){},performance:{now:()=>0}});
 vm.runInContext(SCRIPT,sandbox);

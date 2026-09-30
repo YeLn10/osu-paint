@@ -138,7 +138,7 @@ class ExportTests(unittest.TestCase):
         for now in range(2000, 2201):
             visible = [1 - position(points, t, plan["time_range_ms"]) +
                        position(points, now, plan["time_range_ms"]) for _, t in notes]
-            self.assertEqual(sum(.2 <= y <= .8 for y in visible), 1, f"Picture blinked at {now} ms")
+            self.assertEqual(sum(0 <= y <= 1 for y in visible), 1, f"Picture blinked at {now} ms")
         self.assertEqual(len(notes), 1)
 
     def test_stable_identical_frames_still_clear_during_an_explicit_gap(self):
@@ -148,7 +148,7 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(len(notes), 48)
         for now in (2549, 2750, 2951):
             self.assertFalse(any(0 <= 1 - position(points, t, plan["time_range_ms"]) +
-                                 position(points, now, plan["time_range_ms"]) <= 768 / 658
+                                 position(points, now, plan["time_range_ms"]) <= 1
                                  for _, t in notes))
 
     def test_stable_changing_frames_use_short_exact_integer_sweeps(self):
@@ -173,7 +173,7 @@ class ExportTests(unittest.TestCase):
             for now in (start, (start + end) / 2, end):
                 visible = [(x, 1 - position(points, t, plan["time_range_ms"]) +
                             position(points, now, plan["time_range_ms"])) for x, t in notes]
-                visible = [(int(x * 2 / 512), y) for x, y in visible if 0 <= y <= 768 / 658]
+                visible = [(int(x * 2 / 512), y) for x, y in visible if 0 <= y <= 1]
                 self.assertEqual(len(visible), 24)
                 self.assertEqual({col for col, _ in visible}, {index})
         self.assertTrue(all(t == int(t) for _, t in notes))
@@ -194,7 +194,7 @@ class ExportTests(unittest.TestCase):
                         self.assertAlmostEqual(y + position(points, frame["start_ms"], plan["time_range_ms"]),
                                                note["y"], delta=1e-6)
                         self.assertGreater(y + position(points, frame["exit_end_ms"], plan["time_range_ms"]),
-                                           768 / 658 + 8 / 658)
+                                           1 + .5 / height)
 
     def test_stable_rows_remain_distinct_on_integer_millisecond_grid(self):
         for height in (1, 6, 24, 128):
@@ -206,7 +206,7 @@ class ExportTests(unittest.TestCase):
             self.assertTrue(all(p["time"] == int(p["time"]) for p in plan["points"]))
             for note in plan["notes"]:
                 y = 1 - position(points, note["time_ms"], plan["time_range_ms"]) + position(points, 2000, plan["time_range_ms"])
-                self.assertAlmostEqual(y, note["y"], delta=0.3 / height)
+                self.assertAlmostEqual(y, note["y"], delta=1e-6)
             self.assertIn("Version: stable", text)
 
     def test_stable_long_video_preserves_reference_bpm(self):
@@ -220,7 +220,7 @@ class ExportTests(unittest.TestCase):
         for frame in plan["frames"]:
             origin = plan["frames"][frame["note_frame"]]["start_ms"]
             drift = position(points, frame["end_ms"], plan["time_range_ms"]) - position(points, origin, plan["time_range_ms"])
-            self.assertLess(drift, .014, "Repeated pictures must be renewed before drift exceeds half a row")
+            self.assertLess(drift, .5 / 24, "Repeated pictures must be renewed before drift exceeds half a row")
 
     def test_stable_long_changing_video_keeps_the_reference_bpm(self):
         windows = [(2000 + i * 100, 2075 + i * 100) for i in range(1000)]
@@ -243,10 +243,10 @@ class ExportTests(unittest.TestCase):
         points, notes = decode(encode_osu(plan))
         self.assertEqual(len(plan["frames"]), 3)
         self.assertEqual(len(notes), 48)
-        for now, column in ((2475, 0), (2999, 1), (3000, 1), (3499, 1)):
+        for now, column in ((2475, 0), (3000, 1), (3200, 1), (3499, 1)):
             visible = [(x, 1 - position(points, t, plan["time_range_ms"]) +
                         position(points, now, plan["time_range_ms"])) for x, t in notes]
-            visible = [(int(x * 2 / 512), y) for x, y in visible if .2 <= y <= .8]
+            visible = [(int(x * 2 / 512), y) for x, y in visible if 0 <= y <= 1]
             self.assertTrue(visible)
             self.assertEqual({c for c, _ in visible}, {column})
 
@@ -257,7 +257,7 @@ class ExportTests(unittest.TestCase):
         self.assertLess(plan["transition_ms"], 1)
         for _, note_time in notes:
             y = 1 - position(points, note_time, interval) + position(points, 4001, interval)
-            self.assertGreater(y, 768 / 658 + 8 / 658)
+            self.assertGreater(y, 1 + .5 / len(plan["pattern"]))
         self.assertTrue(all(6 <= beat <= 60000 and 0.01 <= sv <= 10 for _, beat, sv in points))
 
     def test_free_timing_preserves_windows_and_blank_gaps(self):
@@ -268,13 +268,13 @@ class ExportTests(unittest.TestCase):
         points, notes = decode(encode_osu(plan))
         interval = plan["time_range_ms"]
         for now in (2501, 2750, 2999):
-            self.assertFalse(any(0 <= 1 - position(points, t, interval) + position(points, now, interval) <= 768 / 658
+            self.assertFalse(any(0 <= 1 - position(points, t, interval) + position(points, now, interval) <= 1
                                  for _, t in notes), "Blank gap contains a note, including below judgement")
         for index, frame in enumerate(plan["frames"]):
             for now in (frame["start_ms"], frame["end_ms"]):
                 visible = [(note, 1 - position(points, note["time_ms"], interval) + position(points, now, interval))
                            for note in plan["notes"]]
-                visible = [(note, y) for note, y in visible if 0 <= y <= 768 / 658]
+                visible = [(note, y) for note, y in visible if 0 <= y <= 1]
                 self.assertEqual(len(visible), sum(row.count('#') for row in frames[index]))
                 for note, y in visible:
                     self.assertEqual(note["frame"], index)
@@ -300,7 +300,7 @@ class ExportTests(unittest.TestCase):
                 for note in plan["notes"]:
                     now = plan["frames"][note["frame"]]["exit_end_ms"]
                     y = 1 - position(points, note["time_ms"], plan["time_range_ms"]) + position(points, now, plan["time_range_ms"])
-                    self.assertGreater(y, 768 / 658 + 8 / 658)
+                    self.assertGreater(y, 1 + .5 / len(plan["pattern"]))
                 self.assertTrue(all(6 <= p["beat_length"] <= 60000 and 0.01 <= p["sv"] <= 10 for p in plan["points"]))
 
     @unittest.skipUnless(shutil.which("node"), "Node.js unavailable; preview syntax check skipped")
@@ -321,7 +321,7 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(len(plan["frames"]), 3)
         self.assertEqual(plan["frames"][-1]["end_ms"], 5000)
         for index, frame in enumerate(plan["frames"]):
-            expected = sorted((col, 0.2 + (row + 0.5) * 0.6 / 3)
+            expected = sorted((col, (row + 0.5) / 3)
                               for row, line in enumerate(frames[index])
                               for col, pixel in enumerate(line) if pixel == "#")
             for t in (frame["start_ms"], (frame["start_ms"] + frame["end_ms"]) / 2,
@@ -379,7 +379,7 @@ class ExportTests(unittest.TestCase):
                 plan = compile_pattern(pattern, start, end, speed, transition)
                 points, notes = decode(encode_osu(plan))
                 interval = plan["time_range_ms"]
-                expected = sorted((col, 0.2 + (row + 0.5) * 0.6 / len(pattern))
+                expected = sorted((col, (row + 0.5) / len(pattern))
                                   for row, line in enumerate(pattern)
                                   for col, c in enumerate(line) if c == "#")
                 actual = sorted((int(x * len(pattern[0]) / 512),
@@ -413,10 +413,10 @@ class ExportTests(unittest.TestCase):
         plan = compile_pattern(["##", ".#"], 2000, 4000)
         points, _ = decode(encode_osu(plan))
         drift = (position(points, 4000, plan["time_range_ms"]) -
-                 position(points, 2000, plan["time_range_ms"])) * 658
+                 position(points, 2000, plan["time_range_ms"])) * 768
         self.assertGreater(drift, 0)
         self.assertLess(drift, 0.3)
-        self.assertAlmostEqual(drift, plan["drift_at_658px"], delta=1e-4)
+        self.assertAlmostEqual(drift, plan["drift_at_768px"], delta=1e-4)
 
     def test_invalid_patterns(self):
         for text in ("", "..", "#\n##", "x", "# #", "#" * 19):
@@ -426,7 +426,7 @@ class ExportTests(unittest.TestCase):
     def test_invalid_timing_and_reference_bpm(self):
         for kwargs in ({"start_ms": 0}, {"end_ms": 1000}, {"end_ms": math.nan},
                        {"scroll_speed": 0}, {"transition_ms": 0},
-                       {"transition_ms": 0.001}, {"end_ms": 2_000_000},
+                       {"transition_ms": 0.001}, {"end_ms": 5_000_000},
                        {"start_ms": 300, "transition_ms": 200}):
             args = {"start_ms": 2000, "end_ms": 4000} | kwargs
             with self.subTest(args=args), self.assertRaises(ValueError):
@@ -451,13 +451,14 @@ class ExportTests(unittest.TestCase):
     def test_long_video_keeps_reference_bpm_at_60_fps(self):
         count = 12000
         period = 1000 / 60
-        windows = [(2000 + i * period, 2000 + (i + 1) * period - 0.575)
+        transition = minimum_transition_ms(27)
+        windows = [(2000 + i * period, 2000 + (i + 1) * period - transition)
                    for i in range(count)]
         plan = compile_frames([["#"]] * count, frame_times=windows, fast_clear=True,
                               allow_empty_frames=True, anchor_reference=True)
         self.assertEqual(plan["base_beat_length_ms"], 500)
         self.assertLess(len(plan["notes"]), count // 10)
-        self.assertLessEqual(plan["drift_at_658px"], 0.5)
+        self.assertLessEqual(plan["drift_at_768px"], 0.5)
         self.assertEqual(len(plan["frames"]), count)
 
     def test_imported_audio_is_referenced_and_packaged_instead_of_silence(self):

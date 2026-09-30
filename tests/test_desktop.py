@@ -187,7 +187,8 @@ class DesktopTests(unittest.TestCase):
         plan = compile_frames(self.app.frames, frame_times=[(2000, 2075), (2100, 2200)],
                               fast_clear=True, target_client="stable")
         self.app._refresh_preview(compiled_plan=plan)
-        stage_h = (self.app.preview.winfo_height() - 34 * self.app.scale) * 658 / 768
+        stage_h = min(self.app.preview.winfo_height() - 34 * self.app.scale,
+                      (self.app.preview.winfo_width() - 24 * self.app.scale) / 1.6)
         for now in (2000, 2075, 2100, 2200):
             self.app.seek_time.set(now)
             self.app._draw_preview()
@@ -196,7 +197,7 @@ class DesktopTests(unittest.TestCase):
             heights = sorted((sum(self.app.preview.coords(item)[1::2]) / 2 - 10 * self.app.scale) / stage_h
                              for item in items)
             for row, y in enumerate(heights):
-                self.assertAlmostEqual(y, .2 + (row + .5) * .6 / 24,
+                self.assertAlmostEqual(y, (row + .5) / 24,
                                        delta=plan["drift_playfield_fraction"] + 1e-6)
 
     def test_duplicate_is_independent_and_delete_selects_valid_frame(self):
@@ -210,6 +211,33 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(self.app.frames, [HEART])
         self.app.delete_frame()
         self.assertEqual(len(self.app.frames), 1)
+
+    def test_preview_pixels_cover_the_full_height_and_available_width(self):
+        self.root.deiconify()
+        self.root.update()
+        for keys in (1, 8, 18):
+            for merged in (False, True):
+                with self.subTest(keys=keys, holds=merged):
+                    self.app.frames = [["#" * keys] * 3]
+                    plan = compile_frames(self.app.frames, 2000, 2400, fast_clear=True,
+                                          target_client="stable", merge_holds=merged)
+                    self.app._refresh_preview(compiled_plan=plan)
+                    height = min(self.app.preview.winfo_height() - 34 * self.app.scale,
+                                 (self.app.preview.winfo_width() - 24 * self.app.scale) / 1.6)
+                    left = (self.app.preview.winfo_width() - height * 1.6) / 2
+                    top = 10 * self.app.scale
+                    lane = min(1.6 * height, keys * 100 / 480 * height) / keys
+                    cells = [self.app.preview.coords(item) for item in self.app.preview.find_withtag("note")]
+                    for col in range(keys):
+                        column = sorted((cell for cell in cells if abs(cell[0] - left - col * lane) < 1e-5),
+                                        key=lambda cell: cell[1])
+                        self.assertTrue(column)
+                        edge = top
+                        for x1, y1, x2, y2 in column:
+                            self.assertAlmostEqual(y1, edge, delta=1e-5)
+                            self.assertAlmostEqual(x2 - x1, lane, delta=1e-5)
+                            edge = y2
+                        self.assertAlmostEqual(edge, top + height, delta=1e-5)
 
     def test_empty_frame_is_editable_but_not_exportable(self):
         self.app.add_frame()
@@ -350,6 +378,17 @@ class DesktopTests(unittest.TestCase):
             confirm.assert_called_once()
             self.assertFalse(self.app.exporting)
             self.assertEqual((output / "report.json").read_text(encoding="utf-8"), "keep")
+
+    def test_overwrite_cancel_preserves_an_existing_skin(self):
+        with tempfile.TemporaryDirectory() as directory:
+            skin = Path(directory) / "pixel-film.osk"
+            skin.write_bytes(b"keep")
+            self.app.output_dir.set(directory)
+            with patch("osu_paint_desktop.messagebox.askyesno", return_value=False) as confirm:
+                self.app.export()
+            confirm.assert_called_once()
+            self.assertFalse(self.app.exporting)
+            self.assertEqual(skin.read_bytes(), b"keep")
 
     def test_export_error_restores_controls_and_reports_failure(self):
         with tempfile.TemporaryDirectory() as directory:

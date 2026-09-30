@@ -12,8 +12,11 @@ from pathlib import Path
 import wave
 import zipfile
 
+from osu_paint_skin import DEFAULT_ASPECT_RATIO, build_skins
+
 
 SUPPORTED_KEY_COUNTS = tuple(range(1, 19))
+PLAYFIELD_HEIGHT = 768
 
 
 @dataclass(frozen=True)
@@ -100,7 +103,7 @@ def minimum_transition_ms(scroll_speed, target_client="lazer", height=1):
         raise ValueError("目标客户端须为 lazer 或 stable。")
     if not math.isfinite(scroll_speed) or not 1 <= scroll_speed <= 40:
         raise ValueError("lazer 滚速须在 1–40 之间。")
-    time_range = 11485 / scroll_speed * (658 / 643.2 if target_client == "lazer" else 1)
+    time_range = 11485 / scroll_speed * 480 / 402
     # Lazer's maximum legal speed is 500 / 6 * 10. Round UP to avoid exceeding it.
     minimum = math.ceil(1.1 * time_range / (500 / 6 * 10) * 1000) / 1000
     if target_client == "stable":
@@ -137,9 +140,9 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
         raise ValueError("时间和滚速必须是有限数值。")
     if not 1 <= scroll_speed <= 40:
         raise ValueError("lazer 滚速须在 1–40 之间。")
-    # Native lazer skin: 768 - 110 = 658; legacy baseline: 402 * 1.6 = 643.2.
+    # Pixel Film puts judgement at the bottom: 480 instead of legacy 402.
     minimum = minimum_transition_ms(scroll_speed, target_client, len(frames[0]))
-    time_range = 11485 / scroll_speed * (658 / 643.2 if target_client == "lazer" else 1)
+    time_range = 11485 / scroll_speed * 480 / 402
     requested_transition = transition_ms
     if transition_ms <= 0:
         raise ValueError("切帧时长必须大于 0。")
@@ -199,16 +202,16 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
     # or let the total (including reference anchors) drift beyond half a row.
     maximum_counts = sum(math.ceil((end - start) / 50) for start, end in frame_times)
     slow_beat = 1e9 if target_client == "stable" else 60000 - (maximum_counts - 1) * 0.01
-    reuse_distance = min(0.18 * time_range, 0.3 * time_range / len(frames[0]))
+    reuse_distance = 0.5 * time_range / len(frames[0])
     if target_client == "lazer":
-        reuse_distance = min(reuse_distance, 0.5 * time_range / 658)
+        reuse_distance = min(reuse_distance, 0.5 * time_range / PLAYFIELD_HEIGHT)
     for i in range(1, len(frames)):
         first = note_frames[i - 1]
         gap = frame_times[i][0] - frame_times[i - 1][1]
         hold = frame_times[i][1] - frame_times[first][0]
         anchored = anchors[first]
         distance = anchored * 0.01 + (hold - anchored) * 500 / slow_beat * 0.01
-        if frames[i] == frames[i - 1] and gap <= 2 * transition_ms + 1e-7 and distance <= reuse_distance:
+        if frames[i] == frames[i - 1] and gap <= 2 * transition_ms + 1e-7 and distance < reuse_distance:
             note_frames[i] = first
             anchors[i] = 0  # No sweep means no corresponding reference-BPM anchor is needed.
     counts = [math.ceil((end - start - anchor) / 50)
@@ -250,7 +253,7 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
             previous = hold_distance
             row_times[first] = {}
             for i, row in enumerate(levels):
-                distance = (0.8 - (row + 0.5) * 0.6 / height) * time_range
+                distance = (1 - (row + 0.5) / height) * time_range
                 if distance <= previous:
                     raise ValueError("展示时间过长，图案会接近判定线；请缩短时间范围。")
                 points.append(stable_fast_point(sweep_start + i, distance - previous))
@@ -262,15 +265,15 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
         before += duration - minimum
         # Place rows on the integer grid first; fit SV to their exact distances.
         # Compensating the hold drift keeps the first row at its intended height.
-        distance = (0.2 + 0.3 / height) * time_range - hold_distance
+        distance = 0.5 / height * time_range - hold_distance
         if distance <= 0:
             raise ValueError("展示时间过长，图案会接近判定线；请缩短时间范围。")
         points.append(stable_fast_point(end, distance / before))
         row_times[first] = [end + before + (height - 1 - row) * between for row in range(height)]
         if height > 1:
-            points.append(stable_fast_point(end + before, 0.6 / height * time_range / between))
+            points.append(stable_fast_point(end + before, time_range / height / between))
         points.append(stable_fast_point(end + before + (height - 1) * between,
-                                        (0.3 + 0.3 / height) * time_range / after))
+                                        (0.1 + 0.5 / height) * time_range / after))
 
     for index, (rows, (start, end), count) in enumerate(zip(frames, frame_times, counts)):
         frame = {"pattern": rows, "start_ms": start, "end_ms": end,
@@ -332,10 +335,10 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
         frame["note_frame"] = first
         frame["entry_start_ms"] = frame_plans[first]["entry_start_ms"]
         drift = (timeline.position(frame["end_ms"]) - timeline.position(frame_plans[first]["start_ms"])) / time_range
-        if drift >= 0.19:
+        if drift >= 0.5 / len(frame["pattern"]):
             raise ValueError("展示时间过长，图案会接近判定线；请缩短时间范围。")
         frame["drift_playfield_fraction"] = drift
-        frame["drift_at_658px"] = drift * 658
+        frame["drift_at_768px"] = drift * PLAYFIELD_HEIGHT
         if index != first:
             continue
         rows = frame["pattern"]
@@ -343,14 +346,14 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
         for row in {r for _, top, bottom in _note_runs(rows, merge_holds) for r in (top, bottom)}:
             # Row zero is at the top. Hold heads are the BOTTOM of a lit run,
             # with their later tail timestamp at the top; never span dark gaps.
-            y = 0.2 + (row + 0.5) * 0.6 / len(rows)
+            y = (row + 0.5) / len(rows)
             times[row] = (row_times[index][row] if target_client == "stable" else
                           timeline.time_at(timeline.position(frame["start_ms"]) + (1 - y) * time_range))
         for column, top, bottom in _note_runs(rows, merge_holds):
             note = {"frame": index, "column": column, "row": bottom, "time_ms": times[bottom],
-                    "y": 0.2 + (bottom + 0.5) * 0.6 / len(rows)}
+                    "y": (bottom + 0.5) / len(rows)}
             if top != bottom:
-                note.update(end_row=top, end_time_ms=times[top], end_y=0.2 + (top + 0.5) * 0.6 / len(rows))
+                note.update(end_row=top, end_time_ms=times[top], end_y=(top + 0.5) / len(rows))
             notes.append(note)
     if not notes:
         raise ValueError("所有帧均为空白，至少需要一个 #；视频需要包含亮部。")
@@ -363,14 +366,14 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
     drift = max(frame["drift_playfield_fraction"] for frame in frame_plans)
     return {
         "pattern": frames[0], "frames": frame_plans, "keys": len(frames[0][0]),
+        "screen_aspect_ratio": DEFAULT_ASPECT_RATIO,
         "start_ms": start_ms, "end_ms": end_ms,
         "transition_ms": transition_ms, "scroll_speed": scroll_speed,
         "requested_transition_ms": requested_transition, "fast_clear": fast_clear,
         "timing_mode": timing_mode, "target_client": target_client, "merge_holds": merge_holds,
         "time_range_ms": time_range, "base_beat_length_ms": base,
-        "skin_assumption": ("lazer default skin, downscroll, no speed/column mods" if target_client == "lazer" else
-                            "stable legacy baseline, fixed scroll speed, downscroll, no speed/column mods; experimental"),
-        "drift_playfield_fraction": drift, "drift_at_658px": drift * 658,
+        "skin_assumption": "Pixel Film full-screen skin, HitPosition 480, fixed scroll speed, downscroll, no speed/column mods",
+        "drift_playfield_fraction": drift, "drift_at_768px": drift * PLAYFIELD_HEIGHT,
         "points": [p.__dict__ for p in points], "notes": notes,
     }
 
@@ -416,13 +419,14 @@ main{display:flex;gap:32px}canvas{background:#090c14;border:1px solid #434b67}
 input{width:100%}button{padding:8px 20px}pre{line-height:1.4;color:#80e0de}
 </style><h1>SV 图案位置预览</h1>
 <p>几何模型预览；不是游戏实机画面。速度设置、皮肤和判定会影响实际外观。</p>
-<main><canvas id="view" width="360" height="768"></canvas><div>
+<main><canvas id="view" width="960" height="600" style="width:60%;height:auto;align-self:flex-start"></canvas><div>
 <pre id="pattern">""" + pattern + """</pre><p id="info"></p><button id="play">播放</button>
 <p><input id="seek" type="range" step="0.01"></p><output id="time"></output>
-<p>白色横线是判定线；包含判定线下方区域。<br>按位置清场，不在判定时间直接隐藏音符。<br>不模拟皮肤或 Miss 淡出。</p>
+<p>全屏位置预览：白底黑色像素，判定线在底边。<br>按位置清场，不在判定时间直接隐藏音符。<br>不模拟判定或 Miss 淡出。</p>
 </div></main><script>
 const plan=""" + data + """;
 const canvas=document.getElementById('view'),ctx=canvas.getContext('2d');
+canvas.width=Math.round(canvas.height*plan.screen_aspect_ratio);
 const seek=document.getElementById('seek'),time=document.getElementById('time');
 const points=plan.points,positions=[0];
 const speed=p=>plan.base_beat_length_ms/p.beat_length*p.sv;
@@ -433,17 +437,17 @@ const noteEndPositions=plan.notes.map(n=>position(n.end_time_ms??n.time_ms));
 const maxNoteSpan=notePositions.reduce((span,start,i)=>Math.max(span,noteEndPositions[i]-start),0);
 function lowerBound(a,x){let lo=0,hi=a.length;while(lo<hi){let m=(lo+hi)>>>1;if(a[m]<x)lo=m+1;else hi=m;}return lo;}
 seek.min=plan.start_ms-plan.transition_ms-40;seek.max=plan.end_ms+plan.transition_ms+40;seek.value=plan.start_ms;
-document.getElementById('info').textContent=`${plan.keys}K · ${plan.frames.length} 帧 · 滚速 ${plan.scroll_speed} · ${plan.start_ms}–${plan.end_ms} ms；单帧最大漂移约 ${plan.drift_at_658px.toFixed(4)} px（658 px 高度）。`;
-function draw(){let t=+seek.value,w=canvas.width/plan.keys;ctx.clearRect(0,0,360,768);
-ctx.strokeStyle='#293047';for(let c=1;c<plan.keys;c++){ctx.beginPath();ctx.moveTo(c*w,0);ctx.lineTo(c*w,768);ctx.stroke();}
-const current=position(t),lower=current+(1-772/658)*plan.time_range_ms-maxNoteSpan,upper=current+(1+4/658)*plan.time_range_ms;
-ctx.fillStyle='#80e0de';for(let i=lowerBound(notePositions,lower);i<plan.notes.length&&notePositions[i]<=upper;i++){
-const n=plan.notes[i],y=(1-(notePositions[i]-current)/plan.time_range_ms)*658,tailY=(1-(noteEndPositions[i]-current)/plan.time_range_ms)*658;
-if(y>=-4&&tailY<=772){const top=Math.max(0,tailY-4);ctx.fillRect(n.column*w+2,top,w-4,Math.min(768,y+4)-top);}}
+document.getElementById('info').textContent=`${plan.keys}K · ${plan.frames.length} 帧 · 滚速 ${plan.scroll_speed} · ${plan.start_ms}–${plan.end_ms} ms；单帧最大漂移约 ${plan.drift_at_768px.toFixed(4)} px（768 px 高度）。`;
+function draw(){let t=+seek.value,h=canvas.height,w=Math.min(canvas.width,plan.keys*100/480*h)/plan.keys,half=h/plan.pattern.length/2;
+ctx.clearRect(0,0,canvas.width,h);ctx.fillStyle='white';ctx.fillRect(0,0,w*plan.keys,h);
+const current=position(t),lower=current-half/h*plan.time_range_ms-maxNoteSpan,upper=current+(1+half/h)*plan.time_range_ms;
+ctx.fillStyle='black';for(let i=lowerBound(notePositions,lower);i<plan.notes.length&&notePositions[i]<=upper;i++){
+const n=plan.notes[i],y=(1-(notePositions[i]-current)/plan.time_range_ms)*h,tailY=(1-(noteEndPositions[i]-current)/plan.time_range_ms)*h;
+if(y>-half&&tailY<h+half){const top=Math.max(0,tailY-half);ctx.fillRect(n.column*w,top,w,Math.min(h,y+half)-top);}}
 const index=plan.frames.findIndex((f,i)=>t>=f.start_ms&&(t<=Math.max(f.end_ms,f.sweep_start_ms??f.end_ms)||
     (i+1<plan.frames.length&&t<plan.frames[i+1].start_ms&&f.note_frame!==undefined&&f.note_frame===plan.frames[i+1].note_frame)));
 document.getElementById('pattern').textContent=index<0?'空档 / 进场 / 换帧 / 退场':plan.frames[index].pattern.join('\\n');
-ctx.fillStyle='white';ctx.fillRect(0,657,360,2);time.textContent=t.toFixed(2)+' ms'+(index<0?'':` · 第 ${index+1} 帧`);}
+time.textContent=t.toFixed(2)+' ms'+(index<0?'':` · 第 ${index+1} 帧`);}
 let playing=false,last=0;document.getElementById('play').onclick=()=>{playing=!playing;if(playing&&+seek.value>=+seek.max)seek.value=seek.min;last=performance.now();};
 seek.oninput=()=>{playing=false;draw();};function tick(now){if(playing){seek.value=Math.min(+seek.max,+seek.value+now-last);if(+seek.value>=+seek.max)playing=false;draw();}last=now;requestAnimationFrame(tick);}draw();requestAnimationFrame(tick);
 </script></html>"""
@@ -451,6 +455,7 @@ seek.oninput=()=>{playing=false;draw();};function tick(now){if(playing){seek.val
 
 def write_output(plan, output, *, audio_data=None):
     output.mkdir(parents=True, exist_ok=True)
+    build_skins(output, len(plan["pattern"]))
     audio_filename = "silence.wav" if audio_data is None else "audio.ogg"
     (output / "pattern.osu").write_text(encode_osu(plan, audio_filename), encoding="utf-8")
     if audio_data is not None:
@@ -483,7 +488,10 @@ def write_output(plan, output, *, audio_data=None):
             f"\n使用固定滚速 {number(plan['scroll_speed'])}、向下滚动与 NF；不要使用变速或改变列数的 Mod。\n"
             "确认系统和游戏采用填写的实际刷新率；59.94 / 60000/1001 Hz 不等于 60 Hz。\n"
             "可用 VSync 对齐显示刷新，但它不会把谱面／音频时钟锁到预设相位。\n"
-            "stable 请关闭 Scale osu!mania scroll speed with BPM。超过 9 列可能分成两个舞台。\n"
+            "导入同目录中匹配屏幕比例的 pixel-film*.osk，音符高度已按本次画布行数生成；判定位置为 480。\n"
+            "低键数保留真实键数，列宽最多 100，横向可能无法铺满。\n"
+            "stable 请关闭 Scale osu!mania scroll speed with BPM；配套皮肤将 10–18K 合并为单舞台。\n"
+            "原版 lazer 的 >9K 仍拆分，11/13/15/17K 会少一列；暂不提供客户端扩展。\n"
             "长条外观受皮肤头、尾、身体贴图影响；预览仅验证位置，不模拟判定或 Miss 淡出。\n"
             "转换器不会修改游戏或系统配置。未知相位、时钟抖动或刷新率不匹配仍可能采到切帧；\n"
             "不能保证零残影。请按实际刷新率重新导入，必要时微调画面相位后实测。\n",
@@ -499,7 +507,9 @@ def write_output(plan, output, *, audio_data=None):
             "FrameSync=Custom\n"
             f"CustomFrameLimit={video['game_fps']}\n"
             f"\n使用固定滚速 {number(plan['scroll_speed'])}、向下滚动与 NF；不要使用变速或改变列数的 Mod。\n"
-            "关闭 Scale osu!mania scroll speed with BPM。超过 9 列默认分成两个舞台，布局受皮肤影响。\n"
+            "导入同目录中匹配屏幕比例的 pixel-film*.osk，音符高度已按本次画布行数生成；判定位置为 480。\n"
+            "低键数保留真实键数，列宽最多 100，横向可能无法铺满。\n"
+            "关闭 Scale osu!mania scroll speed with BPM；配套皮肤将 10–18K 合并为单舞台。\n"
             "官方限帧步骤：https://osu.ppy.sh/wiki/en/Performance_troubleshooting#custom\n"
             "转换器不会修改游戏配置。帧率上限与视频采样对齐能减少看到换帧的机会；\n"
             "不同刷新相位、实际 FPS 波动、音频与渲染时钟差异仍可能显示下落和切帧过渡。\n",
@@ -564,8 +574,9 @@ def main():
     except (ValueError, OSError) as error:
         parser.error(str(error))
     print(f"已生成 {args.output.resolve() / 'pattern.osz'}")
+    print("请导入同目录中匹配屏幕比例的 pixel-film*.osk；默认 pixel-film.osk 适用于 16:10（3072×1920）。")
     print(f"{plan['keys']}K / {len(plan['frames'])} 帧 / {len(plan['notes'])} 音符 / 游戏滚速 {number(args.scroll_speed)}")
-    print(f"单帧最大预计漂移 {plan['drift_at_658px']:.4f} px（658 px 高度），不是精确零速。")
+    print(f"单帧最大预计漂移 {plan['drift_at_768px']:.4f} px（768 px 高度），不是精确零速。")
 
 
 if __name__ == "__main__":

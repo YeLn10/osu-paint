@@ -166,7 +166,9 @@ class VideoImportTests(unittest.TestCase):
             self.assertTrue(notes)
             self.assertTrue(all(line.split(",")[3] == "1" for line in notes))
             self.assertTrue(archive.read("audio.ogg").startswith(b"OggS"))
-        self.assertFalse((output / "pixel-film.osk").exists())
+        with zipfile.ZipFile(output / "pixel-film.osk") as skin:
+            self.assertIsNone(skin.testzip())
+            self.assertIn("Keys: 16", skin.read("skin.ini").decode())
 
     def test_game_fps_import_and_preview_share_actual_resolution_and_keep_audio(self):
         options = dict(fps=60, width=17, height=24, target_client="stable", game_fps=60)

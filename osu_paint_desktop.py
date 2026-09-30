@@ -17,10 +17,11 @@ from osu_paint import Point, Timeline, compile_frames, number, parse_frames, wri
 from osu_paint_video import (ImportCancelled, import_video as read_video, preview_video_frame,
                              resolve_video_options)
 from osu_paint_audio import AudioPreview
+from osu_paint_skin import DEFAULT_ASPECT_RATIO, SKIN_PROFILES
 
 
 HEART = [".##.##.", "#######", "#######", ".#####.", "..###..", "...#..."]
-OUTPUT_FILES = ("pattern.osz", "pattern.osu", "silence.wav", "preview.html", "report.json")
+OUTPUT_FILES = ("pattern.osz", "pattern.osu", "silence.wav", "preview.html", "report.json", *SKIN_PROFILES)
 BG = "#101522"
 PANEL = "#192131"
 INK = "#edf1fa"
@@ -271,7 +272,7 @@ class PaintApp:
                             "均分模式：所有帧平分总时间，先扣除切帧时间。\n"
                             "自由模式：选中一帧，填写本帧开始、结束时间。允许留空档，不能重叠；间隔须足够切帧。\n\n"
                             "切帧时长：推进图案所需的时间。越短移动越快，越长越容易看到下落。远离的两帧分别退场、进场。\n"
-                            "极速清场：自动用合法最高速度计算时长，覆盖手动切帧值；滚速 27 时约 0.575 ms。不能保证零过渡画面。\n\n"
+                            "极速清场：自动用合法最高速度计算时长，覆盖手动切帧值；lazer 滚速 27 时约 0.671 ms。不能保证零过渡画面。\n\n"
                             "stable：整数毫秒音符，各行先排整数时间，再计算分段滚速。两种客户端均复用连续相同画面。\n"
                             "stable 使用分段滚速；默认滚速下 24 行切帧为 25 ms，可使用 10 FPS。仍有滚动切换。\n"
                             "刷新率排帧：填写实际 Hz（支持 59.94、60000/1001），按整次刷新安排采样，避免取整时钟的长期错位。\n"
@@ -279,6 +280,8 @@ class PaintApp:
                             "连续单键转长条：同一帧同列的连续亮格合并，不跨空格。stable 极速模式只为头尾保留整数时间，缩短有效下落。\n\n"
                             "游戏滚速：必须与游戏设置一致。它决定时间距离如何换算成舞台位置，不是动画帧率；"
                             "更改后会重新计算音符与变速点，不会改变你填写的展示时间。\n\n"
+                            "导出后请导入同目录中匹配屏幕比例的 pixel-film*.osk；默认 16:10，黑块高度匹配画布行数。\n"
+                            "低键数使用最大列宽并保留真实键数，横向可能无法铺满。原版 lazer 的 >9K 仍会拆分。\n\n"
                             "保存为 JSON 项目可保留全部时间与参数；TXT 仅保存图案。",
                             parent=self.root)
 
@@ -889,7 +892,7 @@ class PaintApp:
             self.seek_time.set(self.plan["frames"][self.selected]["start_ms"])
             self._status(f"{self.plan['keys']}K · {len(self.frames)} 帧 · {len(self.plan['notes'])} 音符 · "
                          f"{'极速' if self.fast_clear.get() else ''}切帧 {self.plan['transition_ms']:.3f} ms · "
-                         f"单帧最大预计漂移 {self.plan['drift_at_658px']:.4f} px / 658 px"
+                         f"单帧最大预计漂移 {self.plan['drift_at_768px']:.4f} px / 768 px"
                          + (" · 已带视频音轨" if self.audio_data is not None else "")
                          + (f" · {number(self.video['fps'])} FPS / {self.video['height']} 行 · "
                             f"游戏 {self.video['game_fps']} FPS；需要游戏限帧和刷新对齐"
@@ -909,17 +912,18 @@ class PaintApp:
             self.preview.create_text(width / 2, height / 2, text="画好图案并填写有效参数后\n这里会显示舞台预览", fill=MUTED, justify="center")
             self.time_label.set("等待有效图案与参数")
             return
-        full_h = max(1, height - 34 * self.scale)
-        stage_h = full_h * 658 / 768
-        stage_w = max(1, min(width - 24 * self.scale, stage_h * 360 / 658))
-        left, top = (width - stage_w) / 2, 10 * self.scale
-        note_half = max(1, 4 * stage_h / 658)
+        full_h = max(1, min(height - 34 * self.scale, (width - 24 * self.scale) / DEFAULT_ASPECT_RATIO))
+        stage_h = full_h
+        full_w = full_h * DEFAULT_ASPECT_RATIO
+        stage_w = min(full_w, self.plan["keys"] * 100 / 480 * full_h)
+        left, top = (width - full_w) / 2, 10 * self.scale
+        note_half = stage_h / len(self.plan["pattern"]) / 2
         lane = stage_w / self.plan["keys"]
         current = self.seek_time.get()
         position = self.timeline.position(current)
         for col in range(self.plan["keys"]):
             self.preview.create_rectangle(left + col * lane, top, left + (col + 1) * lane, top + full_h,
-                                          fill="#141c2b" if col % 2 == 0 else "#101725", outline="#253044")
+                                          fill="white", outline="")
             self.preview.create_text(left + (col + 0.5) * lane, top + full_h + 13 * self.scale, text=str(col + 1), fill=MUTED, font=("Segoe UI", 9))
         first = bisect_left(self.note_distances, position + (1 - (full_h + note_half) / stage_h) * self.plan["time_range_ms"] - self.max_note_span)
         last = bisect_right(self.note_distances, position + (1 + note_half / stage_h) * self.plan["time_range_ms"])
@@ -928,13 +932,12 @@ class PaintApp:
             y = (1 - (distance - position) / self.plan["time_range_ms"]) * stage_h
             tail_y = (1 - (self.note_end_distances[index] - position) / self.plan["time_range_ms"]) * stage_h
             # Keep drawing the body below judgement until the tail is off stage.
-            if y >= -note_half and tail_y <= full_h + note_half:
+            if y > -note_half and tail_y < full_h + note_half:
                 x = left + note["column"] * lane
-                self.preview.create_rectangle(x + 2 * self.scale, max(top, top + tail_y - note_half), x + lane - 2 * self.scale,
+                self.preview.create_rectangle(x, max(top, top + tail_y - note_half), x + lane,
                                               min(top + full_h, top + y + note_half),
-                                              fill=ACCENT if note["column"] % 2 == 0 else MINT, outline="",
+                                              fill="black", outline="",
                                               tags=("note", "hold") if "end_time_ms" in note else "note")
-        self.preview.create_line(left, top + stage_h, left + stage_w, top + stage_h, fill=INK, width=2)
         index = bisect_right(self.frame_starts, current) - 1
         frames = self.plan["frames"]
         holding = index >= 0 and (current <= max(frames[index]["end_ms"], frames[index]["sweep_start_ms"]) or
@@ -1004,7 +1007,8 @@ class PaintApp:
                     self._status(f"已导出：{output / 'pattern.osz'} · "
                                  + ("请按播放设置.txt 限帧并对齐刷新。"
                                     if self.video is not None and self.video.get("game_fps") is not None else
-                                    "也已生成 HTML 预览与报告。"))
+                                    "也已生成 HTML 预览与报告。")
+                                 + " 请导入同目录中匹配屏幕比例的 pixel-film*.osk（默认 16:10）。")
         self.tick_job = self.root.after(16 if self.playing else 80, self._tick)
 
     def choose_output(self):
@@ -1033,7 +1037,7 @@ class PaintApp:
         except (OSError, ValueError) as error:
             self._status(f"导出目录无效：{error}", error=True)
             return
-        if exists and not messagebox.askyesno("确认覆盖", "目录中已有生成文件。要覆盖同名的谱面、音频、预览和报告吗？\n其他文件不会删除。", parent=self.root):
+        if exists and not messagebox.askyesno("确认覆盖", "目录中已有生成文件。要覆盖同名的谱面、音频、皮肤、预览和报告吗？\n其他文件不会删除。", parent=self.root):
             return
         plan, audio_data = self.plan, self.audio_data
         self.exporting = True

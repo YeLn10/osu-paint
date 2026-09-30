@@ -13,14 +13,15 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
-from osu_paint import compile_frames, write_output
+from osu_paint import compile_frames, minimum_transition_ms, write_output
 from osu_paint_desktop import PaintApp
 from osu_paint_video import ImportCancelled, resolve_video_options
 
 
 def video_result(audio=b"OggS test audio"):
     frames = [["..", ".."], ["#.", ".."], ["..", ".#"]]
-    windows = [(2000, 2249.425), (2250, 2499.425), (2500, 2750)]
+    transition = minimum_transition_ms(27)
+    windows = [(2000, 2250 - transition), (2250, 2500 - transition), (2500, 2750)]
     plan = compile_frames(frames, frame_times=windows, fast_clear=True,
                           allow_empty_frames=True, anchor_reference=True)
     video = {"filename": "local-video.mp4", "fps": 4, "width": 2, "height": 2,
