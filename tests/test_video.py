@@ -16,21 +16,45 @@ try:
 except ImportError:
     imageio_ffmpeg = None
 
-from osu_paint import write_output
-from osu_paint_video import ImportCancelled, _run_ffmpeg, import_video, preview_video_frame, validate_video_options
+from osu_paint import encode_osu, write_output
+from osu_paint_video import (ImportCancelled, _run_ffmpeg, import_video, preview_video_frame,
+                             resolve_video_options, validate_video_options)
 
 
 class VideoValidationTests(unittest.TestCase):
     def test_stable_fps_advice_is_valid_at_the_displayed_precision(self):
         options = dict(width=10, height=24, start_ms=2000, scroll_speed=27, target_client="stable")
-        with self.assertRaisesRegex(ValueError, "19.230"):
-            validate_video_options(fps=20, **options)
-        self.assertEqual(validate_video_options(fps=19.230, **options), 25)
+        with self.assertRaisesRegex(ValueError, "38.461"):
+            validate_video_options(fps=40, **options)
+        self.assertEqual(validate_video_options(fps=38.461, **options), 25)
+
+    def test_game_fps_resolution_exposes_the_actual_sampling_tradeoff(self):
+        options = dict(fps=60, width=17, height=24, start_ms=2000, scroll_speed=27, target_client="stable")
+        resolved = resolve_video_options(**options, game_fps=60)
+        self.assertEqual((resolved["fps"], resolved["height"], resolved["width"]), (60, 13, 17))
+        self.assertEqual(resolved["game_fps"], 60)
+        self.assertEqual(validate_video_options(**options, game_fps=60), 14)
+        fractional = resolve_video_options(**dict(options, fps=30), game_fps=144)
+        self.assertEqual((fractional["fps"], fractional["height"]), (28.8, 3))
+        maximum = resolve_video_options(**options, game_fps=250)
+        self.assertEqual((maximum["fps"], maximum["height"]), (50, 1))
+        self.assertEqual(resolve_video_options(**dict(options, fps=10))["height"], 24)
+
+    def test_game_fps_rejects_unsupported_or_impossible_refresh_rates(self):
+        options = dict(fps=30, width=16, height=24, start_ms=2000, scroll_speed=27, target_client="stable")
+        for fps in (59, 60.5, 1000):
+            with self.subTest(game_fps=fps), self.assertRaisesRegex(ValueError, "60–999"):
+                resolve_video_options(**options, game_fps=fps)
+        for fps in (251, 999):
+            with self.subTest(game_fps=fps), self.assertRaisesRegex(ValueError, "250"):
+                resolve_video_options(**options, game_fps=fps)
+        with self.assertRaisesRegex(ValueError, "stable"):
+            resolve_video_options(**dict(options, target_client="lazer"), game_fps=60)
 
     def test_rejects_invalid_fps_dimensions_and_offset(self):
         defaults = dict(fps=10, width=10, height=24, start_ms=2000, scroll_speed=27)
         for field, value in (("fps", 0), ("fps", -1), ("fps", math.nan), ("fps", math.inf),
-                             ("fps", 61), ("width", 0), ("width", 11), ("width", 2.5),
+                             ("fps", 61), ("width", 0), ("width", 19), ("width", 2.5),
                              ("height", 0), ("height", 129), ("height", 1.5),
                              ("start_ms", 0), ("start_ms", math.inf), ("scroll_speed", 0),
                              ("threshold", -1), ("threshold", 256), ("brightness", math.nan),
@@ -40,6 +64,13 @@ class VideoValidationTests(unittest.TestCase):
                 validate_video_options(**dict(defaults, **{field: value}))
         with self.assertRaises(ValueError):
             validate_video_options(**dict(defaults, fps=60, scroll_speed=1))
+
+    def test_all_supported_column_counts_use_ordinary_video_options(self):
+        for width in range(1, 19):
+            for client in ("stable", "lazer"):
+                with self.subTest(width=width, client=client):
+                    validate_video_options(fps=4, width=width, height=4, start_ms=2000,
+                                           scroll_speed=27, target_client=client)
 
     def test_missing_dependency_has_actionable_error(self):
         with patch.dict(sys.modules, {"imageio_ffmpeg": None}), self.assertRaisesRegex(ValueError, "requirements.txt"):
@@ -100,30 +131,136 @@ class VideoImportTests(unittest.TestCase):
         self.assertTrue(all(len(f["pattern"]) == 5 and len(f["pattern"][0]) == 3
                             for f in smaller["plan"]["frames"]))
 
-    def test_reference_import_resamples_to_thirty_fps_and_preserves_audio(self):
-        options = dict(fps=30, width=16, height=12, target_client="stable", reference_animation=True)
-        result = self.load(**options)
-        plan = result["plan"]
-        self.assertEqual(len(plan["frames"]), 30)
-        self.assertEqual([f["start_ms"] for f in plan["frames"][:4]], [2000, 2033, 2066, 2100])
-        self.assertTrue(result["video"]["reference_animation"])
-        self.assertTrue(result["audio"].startswith(b"OggS"))
-        self.assertTrue(all(n["end_ms"] > n["time_ms"] for n in plan["notes"]))
-        preview = preview_video_frame(self.source, frame_index=10, **options)
-        self.assertEqual(preview["frame"], plan["frames"][10]["pattern"])
-        black = self.load(self.black, **options)
-        self.assertEqual(len(black["plan"]["notes"]), 16)
+    def test_high_column_import_and_selected_frame_preview_preserve_audio(self):
+        for width in (11, 12, 14, 16, 17, 18):
+            options = dict(fps=4, width=width, height=4, target_client="stable")
+            with self.subTest(width=width):
+                result = self.load(**options)
+                plan = result["plan"]
+                self.assertEqual(plan["keys"], width)
+                self.assertEqual(len(plan["frames"]), 4)
+                self.assertEqual([f["start_ms"] for f in plan["frames"]], [2000, 2250, 2500, 2750])
+                self.assertTrue(result["audio"].startswith(b"OggS"))
+                self.assertNotIn("reference_animation", result["video"])
+                self.assertTrue(all("end_ms" not in n for n in plan["notes"]))
+                preview = preview_video_frame(self.source, frame_index=2, **options)
+                self.assertEqual(preview["frame"], plan["frames"][2]["pattern"])
+                self.assertEqual(preview["frame"][:2], ["." * width] * 2)
+                self.assertTrue(all(row.startswith("." * (width // 2)) and row.endswith("#" * (width // 2))
+                                    for row in preview["frame"][2:]))
 
-    def test_reference_cli_exports_skin_and_actual_long_notes(self):
-        output = self.directory / "reference-cli"
-        subprocess.run([sys.executable, "osu_paint.py", str(self.source), "--video", "--reference-animation",
-                        "--target-client", "stable", "--fps", "30", "--width", "16", "--height", "12",
-                        "--start-ms", "2000", "--output", str(output)],
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+    def test_high_column_cli_exports_only_short_notes_and_audio(self):
+        output = self.directory / "high-column-cli"
+        script = Path(__file__).resolve().parents[1] / "osu_paint.py"
+        process = subprocess.run([sys.executable, str(script), str(self.source), "--video",
+                                  "--target-client", "stable", "--fps", "4", "--width", "16", "--height", "4",
+                                  "--start-ms", "2000", "--output", str(output)],
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        self.assertEqual(process.returncode, 0, process.stderr.decode(errors="replace"))
         with zipfile.ZipFile(output / "pattern.osz") as archive:
-            self.assertIn(b",128,0,", archive.read("pattern.osu"))
+            self.assertEqual(set(archive.namelist()), {"pattern.osu", "audio.ogg"})
+            exported = archive.read("pattern.osu").decode("utf-8")
+            self.assertIn("CircleSize: 16", exported)
+            notes = exported.split("[HitObjects]", 1)[1].strip().splitlines()
+            self.assertTrue(notes)
+            self.assertTrue(all(line.split(",")[3] == "1" for line in notes))
             self.assertTrue(archive.read("audio.ogg").startswith(b"OggS"))
-        self.assertTrue((output / "pixel-film.osk").is_file())
+        self.assertFalse((output / "pixel-film.osk").exists())
+
+    def test_game_fps_import_and_preview_share_actual_resolution_and_keep_audio(self):
+        options = dict(fps=60, width=17, height=24, target_client="stable", game_fps=60)
+        result = self.load(**options)
+        video, plan = result["video"], result["plan"]
+        self.assertEqual((video["fps"], video["height"]), (60, 13))
+        self.assertEqual((video["requested_fps"], video["requested_height"], video["game_fps"]), (60, 24, 60))
+        self.assertEqual((video["width"], video["start_ms"]), (17, 2000))
+        self.assertAlmostEqual(video["duration_ms"], 1000)
+        self.assertEqual(len(plan["frames"]), 60)
+        self.assertEqual([f["start_ms"] for f in plan["frames"][:4]], [2000, 2015, 2032, 2049])
+        self.assertEqual(plan["frames"][0]["end_ms"], 2001)
+        self.assertTrue(all("end_ms" not in note for note in plan["notes"]))
+        self.assertTrue(result["audio"].startswith(b"OggS"))
+        preview = preview_video_frame(self.source, frame_index=35, **options)
+        self.assertEqual(preview["frame"], plan["frames"][35]["pattern"])
+        self.assertEqual(len(preview["frame"]), 13)
+        self.assertAlmostEqual(preview["time_ms"], 35 * 1000 / 60)
+        pcm = self.ffmpeg(["-i", "pipe:0", "-ac", "1", "-ar", "48000", "-f", "f32le", "pipe:1"], input=result["audio"])
+        samples = array("f", pcm)
+        self.assertLess(max(abs(x) for x in samples[:int(2.20 * 48000)]), 0.001)
+        self.assertGreater(max(abs(x) for x in samples[int(2.30 * 48000):int(2.90 * 48000)]), 0.02)
+        original = self.load()
+        self.assertEqual(set(original["video"]), {"filename", "fps", "width", "height", "start_ms", "duration_ms",
+                                                "threshold", "brightness", "contrast", "invert", "fit"})
+
+    def test_fractional_game_start_is_ready_at_the_first_nominal_refresh_and_keeps_audio_delay(self):
+        result = self.load(fps=60, width=2, height=24, start_ms=2000.6, target_client="stable", game_fps=60)
+        plan = result["plan"]
+        self.assertEqual(plan["frames"][0]["start_ms"], 2000)
+        active = max((point for point in plan["points"] if point["time"] <= 2000.6), key=lambda point: point["time"])
+        self.assertLess(500 / active["beat_length"] * active["sv"], 1e-7)
+        self.assertEqual(result["video"]["start_ms"], 2000.6)
+        baseline = self.load(start_ms=2000.6, target_client="stable")
+        decoded = [self.ffmpeg(["-i", "pipe:0", "-ac", "1", "-ar", "48000", "-f", "f32le", "pipe:1"], input=audio)
+                   for audio in (result["audio"], baseline["audio"])]
+        self.assertEqual(decoded[0], decoded[1])
+
+    def test_exported_game_fps_geometry_is_clean_only_at_the_aligned_refresh_phase(self):
+        from bisect import bisect_right
+        source = self.directory / "alternating-sixty.mkv"
+        raw = bytearray()
+        for index in range(60):
+            for y in range(16):
+                for x in range(16):
+                    raw.extend(bytes([255 if (x >= 8) == bool(index % 2) else 0]) * 3)
+        self.ffmpeg(["-f", "rawvideo", "-pix_fmt", "rgb24", "-s", "16x16", "-r", "60", "-i", "pipe:0",
+                     "-c:v", "ffv1", str(source)], input=bytes(raw))
+        plan = self.load(source, fps=60, width=2, height=24, target_client="stable", game_fps=60)["plan"]
+        exported = encode_osu(plan).replace("\r\n", "\n")
+        timing = exported.split("[TimingPoints]\n", 1)[1].split("\n\n", 1)[0].splitlines()
+        points = []
+        beat = sv = 1
+        for line in timing:
+            fields = line.split(",")
+            time, value = float(fields[0]), float(fields[1])
+            if fields[6] == "1":
+                beat = value
+            else:
+                sv = -100 / value
+            point = (time, 500 / beat * sv)
+            if points and points[-1][0] == time:
+                points[-1] = point
+            else:
+                points.append(point)
+        times = [time for time, speed in points]
+        distances = [0.0]
+        for index in range(1, len(points)):
+            distances.append(distances[-1] + (times[index] - times[index - 1]) * points[index - 1][1])
+
+        def position(time):
+            index = max(0, bisect_right(times, time) - 1)
+            return distances[index] + (time - times[index]) * points[index][1]
+
+        notes = [line.split(",") for line in exported.split("[HitObjects]\n", 1)[1].strip().splitlines()]
+        self.assertTrue(all(note[3] == "1" for note in notes))
+        encoded_notes = [(min(1, int(float(note[0]) * 2 / 512)), position(float(note[2]))) for note in notes]
+
+        def visible(time):
+            current = position(time)
+            return [(column, 1 - (distance - current) / plan["time_range_ms"])
+                    for column, distance in encoded_notes if 0 < distance - current < plan["time_range_ms"]]
+
+        for index in range(60):
+            sample = 2000 + index * 1000 / 60
+            displayed = visible(sample)
+            self.assertEqual(len(displayed), 13, index)
+            expected = {column for row in plan["frames"][index]["pattern"]
+                        for column, pixel in enumerate(row) if pixel == "#"}
+            self.assertEqual({column for column, y in displayed}, expected, index)
+        # A cap controls frequency, not the game's refresh phase. Keep this failure
+        # visible: otherwise a sampled preview could incorrectly claim a real fix.
+        self.assertTrue(any({column for column, y in visible(2000 + index * 1000 / 60 + 8)} == {0, 1}
+                            for index in range(59)))
 
     def test_audio_includes_import_offset_and_original_stream_delay(self):
         result = self.load()
@@ -256,7 +393,7 @@ class VideoImportTests(unittest.TestCase):
         self.assertEqual(result["plan"]["frames"][0]["end_ms"], 2075)
         self.assertTrue(all(n["time_ms"] == int(n["time_ms"]) for n in result["plan"]["notes"]))
         with self.assertRaisesRegex(ValueError, "stable"):
-            self.load(target_client="stable", height=24, fps=30)
+            self.load(target_client="stable", height=24, fps=40)
 
 
 if __name__ == "__main__":

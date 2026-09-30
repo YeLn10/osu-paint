@@ -12,6 +12,9 @@ import wave
 import zipfile
 
 
+SUPPORTED_KEY_COUNTS = tuple(range(1, 19))
+
+
 @dataclass(frozen=True)
 class Point:
     time: float
@@ -38,10 +41,10 @@ class Timeline:
         return self.times[i] + (distance - self.distances[i]) / self.speeds[i]
 
 
-def parse_pattern(text, *, allow_empty=False, max_width=10):
+def parse_pattern(text, *, allow_empty=False):
     rows = text.strip().splitlines()
-    if not rows or not 1 <= len(rows[0]) <= max_width:
-        raise ValueError(f"图案宽度须为 1–{max_width} 列。")
+    if not rows or len(rows[0]) not in SUPPORTED_KEY_COUNTS:
+        raise ValueError("图案列数须为 1–18。")
     if any(len(row) != len(rows[0]) or set(row) - {"#", "."} for row in rows):
         raise ValueError("图案每行必须等宽，只能使用 # 和 .。")
     if not allow_empty and not any("#" in row for row in rows):
@@ -49,7 +52,7 @@ def parse_pattern(text, *, allow_empty=False, max_width=10):
     return rows
 
 
-def parse_frames(text, *, allow_empty=False, max_width=10):
+def parse_frames(text, *, allow_empty=False):
     """Separate equally sized text frames with a line containing --- ."""
     blocks = [[]]
     for line in text.strip().splitlines():
@@ -57,15 +60,15 @@ def parse_frames(text, *, allow_empty=False, max_width=10):
             blocks.append([])
         else:
             blocks[-1].append(line)
-    frames = [parse_pattern("\n".join(block), allow_empty=allow_empty, max_width=max_width) for block in blocks]
+    frames = [parse_pattern("\n".join(block), allow_empty=allow_empty) for block in blocks]
     if any((len(frame), len(frame[0])) != (len(frames[0]), len(frames[0][0]))
            for frame in frames):
         raise ValueError("动画的所有帧必须具有相同的行数和列数。")
     return frames
 
 
-def most_common_beat_length(points, last_object_time):
-    """Match lazer Beatmap.GetMostCommonBeatLength's millisecond grouping."""
+def most_common_beat_length(points, last_object_time, target_client="lazer"):
+    """Match each client's reference-BPM grouping and object-time boundary."""
     durations = defaultdict(float)
     for i, p in enumerate(points):
         start = 0 if i == 0 else p.time
@@ -73,7 +76,9 @@ def most_common_beat_length(points, last_object_time):
             break
         end = min(points[i + 1].time if i + 1 < len(points) else last_object_time,
                   last_object_time)
-        durations[round(p.beat_length * 1000) / 1000] += end - start
+        beat = p.beat_length if target_client == "stable" else round(p.beat_length * 1000) / 1000
+        duration = int(end) - int(start) if target_client == "stable" else end - start
+        durations[beat] += duration
     result = max(durations, key=durations.get)
     return min(max(p.beat_length for p in points),
                max(min(p.beat_length for p in points), result))
@@ -84,11 +89,9 @@ def compile_pattern(rows, start_ms, end_ms, scroll_speed=27, transition_ms=12):
 
 
 def _stable_sweep_steps(time_range, height):
-    maximum_speed = 500 / 6 * 10
-    before = math.ceil((0.2 + 0.3 / height) * time_range / maximum_speed)
-    between = max(1, math.ceil(0.6 / height * time_range / maximum_speed))
-    after = math.ceil((0.3 + 0.3 / height) * time_range / maximum_speed)
-    return before, between, after
+    # Stable accepts every positive red-line beat length. Its remaining limit is
+    # distinct integer note times, with one millisecond at each outside edge.
+    return 1, 1, 1
 
 
 def minimum_transition_ms(scroll_speed, target_client="lazer", height=1):
@@ -97,7 +100,7 @@ def minimum_transition_ms(scroll_speed, target_client="lazer", height=1):
     if not math.isfinite(scroll_speed) or not 1 <= scroll_speed <= 40:
         raise ValueError("lazer 滚速须在 1–40 之间。")
     time_range = 11485 / scroll_speed * (658 / 643.2 if target_client == "lazer" else 1)
-    # Maximum legal speed is 500 / 6 * 10. Round UP to avoid exceeding it.
+    # Lazer's maximum legal speed is 500 / 6 * 10. Round UP to avoid exceeding it.
     minimum = math.ceil(1.1 * time_range / (500 / 6 * 10) * 1000) / 1000
     if target_client == "stable":
         before, between, after = _stable_sweep_steps(time_range, height)
@@ -107,17 +110,11 @@ def minimum_transition_ms(scroll_speed, target_client="lazer", height=1):
 
 def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transition_ms=12,
                    *, frame_times=None, fast_clear=False, allow_empty_frames=False,
-                   anchor_reference=False, target_client="lazer", reference_animation=False):
+                   anchor_reference=False, target_client="lazer"):
     if not frames:
         raise ValueError("至少需要一帧图案。")
     frames = parse_frames("\n---\n".join("\n".join(rows) for rows in frames),
-                          allow_empty=allow_empty_frames or reference_animation,
-                          max_width=18 if reference_animation else 10)
-    if reference_animation:
-        if target_client != "stable":
-            raise ValueError("参考动画模式仅支持 osu!stable，需要配套皮肤和锁定 30 FPS。")
-        from osu_paint_stable import compile_reference_frames
-        return compile_reference_frames(frames, start_ms, end_ms, scroll_speed, frame_times)
+                          allow_empty=allow_empty_frames)
     if not all(math.isfinite(v) for v in (scroll_speed, transition_ms)):
         raise ValueError("时间和滚速必须是有限数值。")
     if not 1 <= scroll_speed <= 40:
@@ -137,7 +134,7 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
     # A transition moves 1.1 complete playfield heights, including edge margins.
     fast_multiplier = 1.1 * time_range / transition_ms
     fast_beat = 500 * 10 / fast_multiplier
-    if not 6 <= fast_beat <= 60000:
+    if target_client == "lazer" and not 6 <= fast_beat <= 60000:
         raise ValueError("换帧时间超出 lazer 合法 BPM 范围；请调整 --transition-ms。")
 
     timing_mode = "free" if frame_times is not None else "uniform"
@@ -163,8 +160,8 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
             frame_times = [(start, frame_times[i + 1][0] - transition_ms
                             if i + 1 < len(frame_times) else end)
                            for i, (start, end) in enumerate(frame_times)]
-        if any(end - start < transition_ms + 2 for start, end in frame_times):
-            raise ValueError(f"stable 每帧展示至少需要 {transition_ms + 2:g} ms；请降低 FPS、行数或延长展示。")
+        if any(end - start < 1 for start, end in frame_times):
+            raise ValueError("stable 每帧展示至少需要 1 ms；请降低 FPS、行数或延长展示。")
     for i, window in enumerate(frame_times):
         if i and window[0] - frame_times[i - 1][1] < transition_ms - 1e-7:
             raise ValueError(f"第 {i}、{i + 1} 帧重叠或间隔不足；至少需要 {transition_ms:.3f} ms 切帧。")
@@ -173,27 +170,42 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
         raise ValueError("进场前至少保留 100 ms；请推迟第一帧开始时间。")
     note_frames = list(range(len(frames)))
     if target_client == "stable":
-        # Bound reuse drift to half a row beyond the initial reference-BPM segment.
-        slow_beat = max(6, 60000 - sum(math.ceil((end - start) / 50) for start, end in frame_times) * 0.01)
-        anchor_distance = (transition_ms + 1) * 0.01
-        reuse_distance = min(0.18 * time_range, anchor_distance + 0.3 * time_range / len(frames[0]))
+        # Stable's positive red lines have no upper beat-length clamp. Reusing
+        # identical pictures avoids needless sweeps while keeping drift below half a row.
+        slow_beat = 1e9
+        reuse_distance = min(0.18 * time_range, 0.3 * time_range / len(frames[0]))
         for i in range(1, len(frames)):
             gap = frame_times[i][0] - frame_times[i - 1][1]
             hold = frame_times[i][1] - frame_times[note_frames[i - 1]][0]
-            distance = anchor_distance + max(0, hold - transition_ms - 1) * 500 / slow_beat * 0.01
+            distance = hold * 500 / slow_beat * 0.01
             if (frames[i] == frames[i - 1] and gap <= 2 * transition_ms + 1e-7
                     and distance <= reuse_distance):
                 note_frames[i] = note_frames[i - 1]
     anchors = [min(transition_ms * 2, (end - start) / 2) if anchor_reference else 0
                for start, end in frame_times]
     if target_client == "stable":
-        anchors = [transition_ms + 1 if index == first else 0
-                   for index, first in enumerate(note_frames)]
+        anchors = [0] * len(frames)
     counts = [math.ceil((end - start - anchor) / 50)
               for (start, end), anchor in zip(frame_times, anchors)]
-    if 60000 - (sum(counts) - 1) * 0.01 < 6:
+    if target_client == "lazer" and 60000 - (sum(counts) - 1) * 0.01 < 6:
         raise ValueError("展示时间过长，无法分配不同的合法慢速 BPM。")
-    points = [Point(0, 500, 1), Point(start_ms - transition_ms, fast_beat, 10)]
+    fast_index = 0
+    fast_beats = {500}
+
+    def stable_fast_point(time, multiplier):
+        nonlocal fast_index
+        # Exit uses up to three red lines; explicit gaps add an entry line.
+        # Vary their exported doubles so a long video cannot accumulate one fast BPM.
+        beat = round(500 * 5 / multiplier * (1 + (fast_index + 1) / (4 * len(frames) + 3)), 9)
+        while beat in fast_beats:
+            beat = round(beat + 1e-8, 9)
+        fast_beats.add(beat)
+        fast_index += 1
+        return Point(time, beat, multiplier * beat / 500)
+
+    points = [Point(0, 500, 1),
+              stable_fast_point(start_ms - transition_ms, fast_multiplier)
+              if target_client == "stable" else Point(start_ms - transition_ms, fast_beat, 10)]
     frame_plans = []
     slow_index = 0
     entry_start = start_ms - transition_ms
@@ -206,16 +218,14 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
         # Place rows on the integer grid first; fit SV to their exact distances.
         # Compensating the hold drift keeps the first row at its intended height.
         distance = (0.2 + 0.3 / height) * time_range - hold_distance
-        beats = (5000 * before / distance, 5000 * between / (0.6 / height * time_range),
-                 5000 * after / ((0.3 + 0.3 / height) * time_range))
-        if not all(6 <= beat <= 60000 for beat in (beats if height > 1 else (beats[0], beats[2]))):
-            raise ValueError("stable 分段切帧超出合法 BPM 范围；请缩短切帧时长或展示时间。")
-        points.append(Point(end, beats[0], 10))
+        if distance <= 0:
+            raise ValueError("展示时间过长，图案会接近判定线；请缩短时间范围。")
+        points.append(stable_fast_point(end, distance / before))
         row_times[first] = [end + before + (height - 1 - row) * between for row in range(height)]
         if height > 1:
-            points.append(Point(end + before, beats[1], 10))
-        points.append(Point(end + before + (height - 1) * between,
-                            beats[2], 10))
+            points.append(stable_fast_point(end + before, 0.6 / height * time_range / between))
+        points.append(stable_fast_point(end + before + (height - 1) * between,
+                                        (0.3 + 0.3 / height) * time_range / after))
 
     for index, (rows, (start, end), count) in enumerate(zip(frames, frame_times, counts)):
         frame = {"pattern": rows, "start_ms": start, "end_ms": end,
@@ -230,7 +240,8 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
             hold_distance += anchors[index] * 0.01
         for i in range(count):
             # Keep values unique across ALL frames, not just within one hold.
-            points.append(Point(start + anchors[index] + i * 50, 60000 - slow_index * 0.01, 0.01))
+            beat = 1e9 + slow_index if target_client == "stable" else 60000 - slow_index * 0.01
+            points.append(Point(start + anchors[index] + i * 50, beat, 0.01))
             hold_distance += (min(50, end - points[-1].time) * 500 / points[-1].beat_length * 0.01)
             slow_index += 1
         if index == len(frames) - 1:
@@ -252,7 +263,8 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
                 else:
                     points.append(Point(end, fast_beat, 10))
                 points.extend([Point(end + transition_ms, 500, 1),
-                               Point(next_start - transition_ms, fast_beat, 10)])
+                               stable_fast_point(next_start - transition_ms, fast_multiplier)
+                               if target_client == "stable" else Point(next_start - transition_ms, fast_beat, 10)])
                 entry_start = next_start - transition_ms
             else:
                 # Close neighbours share one sweep, as in the original equal-time mode.
@@ -296,7 +308,7 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
     if not notes:
         raise ValueError("所有帧均为空白，至少需要一个 #；视频需要包含亮部。")
     notes.sort(key=lambda n: (n["time_ms"], n["column"]))
-    base = most_common_beat_length(points, notes[-1]["time_ms"])
+    base = most_common_beat_length(points, notes[-1]["time_ms"], target_client)
     if not math.isclose(base, 500, abs_tol=1e-9):
         raise ValueError("该时间组合改变了参考 BPM；请增加 start 或缩短 transition。")
 
@@ -338,17 +350,11 @@ def encode_osu(plan, audio_filename="silence.wav"):
     lines.extend(["", "[HitObjects]"])
     for note in plan["notes"]:
         x = int((note["column"] + 0.5) * 512 / plan["keys"])
-        if "end_ms" in note:
-            lines.append(f"{x},192,{number(note['time_ms'])},128,0,{number(note['end_ms'])}:0:0:0:0:")
-        else:
-            lines.append(f"{x},192,{number(note['time_ms'])},1,0,0:0:0:0:")
+        lines.append(f"{x},192,{number(note['time_ms'])},1,0,0:0:0:0:")
     return "\n".join(lines) + "\n"
 
 
 def make_preview(plan):
-    if plan.get("reference_animation"):
-        from osu_paint_stable import make_reference_preview
-        return make_reference_preview(plan)
     # Geometry preview only: native skins, object lifetime and judgement aren't simulated.
     data = json.dumps(plan, ensure_ascii=False).replace("<", "\\u003c")
     pattern = html.escape("\n".join(plan["pattern"]))
@@ -407,9 +413,26 @@ def write_output(plan, output, *, audio_data=None):
             archive.write(output / name, name)
     (output / "report.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
     (output / "preview.html").write_text(make_preview(plan), encoding="utf-8")
-    if plan.get("reference_animation"):
-        from osu_paint_stable import write_reference_skin
-        write_reference_skin(plan, output)
+    video = plan.get("video", {})
+    settings_path = output / "播放设置.txt"
+    if video.get("game_fps") is not None:
+        settings_path.write_text(
+            "osu!stable 普通 mania 短音符播放设置\n"
+            f"目标游戏帧率：{video['game_fps']} FPS\n"
+            f"视频采样帧率：{number(video['fps'])} FPS（请求 {number(video.get('requested_fps', video['fps']))} FPS）\n"
+            f"画面：{plan['keys']} 列 × {video['height']} 行（请求 {video.get('requested_height', video['height'])} 行）\n"
+            f"完整换帧时长：{number(plan['transition_ms'])} ms\n"
+            "\n关闭游戏后，手动修改游戏目录的 osu!.用户名.cfg，再重开并核对实际 FPS：\n"
+            "FrameSync=Custom\n"
+            f"CustomFrameLimit={video['game_fps']}\n"
+            f"\n使用固定滚速 {number(plan['scroll_speed'])}、向下滚动与 NF；不要使用变速或改变列数的 Mod。\n"
+            "关闭 Scale osu!mania scroll speed with BPM。超过 9 列默认分成两个舞台，布局受皮肤影响。\n"
+            "官方限帧步骤：https://osu.ppy.sh/wiki/en/Performance_troubleshooting#custom\n"
+            "转换器不会修改游戏配置。帧率上限与视频采样对齐能减少看到换帧的机会；\n"
+            "不同刷新相位、实际 FPS 波动、音频与渲染时钟差异仍可能显示下落和切帧过渡。\n",
+            encoding="utf-8")
+    elif settings_path.exists():
+        settings_path.unlink()
 
 
 def main():
@@ -417,10 +440,10 @@ def main():
     parser.add_argument("pattern", type=Path, help="文本图案；配合 --video 时为本地视频文件")
     parser.add_argument("--video", action="store_true", help="导入视频及音轨，自动使用极速清场")
     parser.add_argument("--fps", type=float, default=10, help="视频每秒帧数，可填小数，默认 10")
-    parser.add_argument("--width", type=int, default=10, help="视频列数，普通模式 1–10；参考模式支持 16，默认 10")
+    parser.add_argument("--game-fps", type=int, help="stable 目标游戏 FPS，60–999；自动对齐视频采样和行数")
+    parser.add_argument("--width", type=int, default=10, help="视频列数：1–18，默认 10")
     parser.add_argument("--height", type=int, default=24, help="视频画面高度 / 行，1–128，默认 24")
     parser.add_argument("--target-client", choices=("lazer", "stable"), default="lazer", help="stable 为实验整数时间兼容")
-    parser.add_argument("--reference-animation", action="store_true", help="stable 像素长条动画，需配套皮肤并锁定 30 FPS")
     parser.add_argument("--threshold", type=float, default=128, help="视频黑白阈值，0–255")
     parser.add_argument("--brightness", type=float, default=0, help="视频亮度偏移，-255–255")
     parser.add_argument("--contrast", type=float, default=1, help="视频对比度，>0–5")
@@ -441,17 +464,17 @@ def main():
             result = import_video(args.pattern, fps=args.fps, width=args.width, height=args.height,
                                   start_ms=args.start_ms, scroll_speed=args.scroll_speed, target_client=args.target_client,
                                   threshold=args.threshold, brightness=args.brightness, contrast=args.contrast,
-                                  invert=args.invert, fit=args.fit, reference_animation=args.reference_animation)
+                                  invert=args.invert, fit=args.fit, game_fps=args.game_fps)
             plan = result["plan"]
             write_output(plan, args.output, audio_data=result["audio"])
         else:
+            if args.game_fps is not None:
+                raise ValueError("--game-fps 仅可用于 stable 视频导入。")
             if args.end_ms is None:
                 raise ValueError("文本图案需要 --end-ms。")
-            frames = parse_frames(args.pattern.read_text(encoding="utf-8-sig"),
-                                  allow_empty=args.reference_animation, max_width=18 if args.reference_animation else 10)
+            frames = parse_frames(args.pattern.read_text(encoding="utf-8-sig"))
             plan = compile_frames(frames, args.start_ms, args.end_ms, args.scroll_speed, args.transition_ms,
-                                  fast_clear=args.fast_clear, target_client=args.target_client,
-                                  reference_animation=args.reference_animation)
+                                  fast_clear=args.fast_clear, target_client=args.target_client)
             write_output(plan, args.output)
     except (ValueError, OSError) as error:
         parser.error(str(error))

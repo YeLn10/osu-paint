@@ -15,7 +15,7 @@ import zipfile
 
 from osu_paint import compile_frames, write_output
 from osu_paint_desktop import PaintApp
-from osu_paint_video import ImportCancelled
+from osu_paint_video import ImportCancelled, resolve_video_options
 
 
 def video_result(audio=b"OggS test audio"):
@@ -27,6 +27,17 @@ def video_result(audio=b"OggS test audio"):
              "start_ms": 2000, "duration_ms": 750}
     plan["video"] = video.copy()
     return {"plan": plan, "audio": audio, "video": video}
+
+
+def optimized_video_result():
+    frames = [["#.", ".."], ["..", ".#"]]
+    plan = compile_frames(frames, frame_times=[(2000, 2230), (2250, 2500)],
+                          fast_clear=True, target_client="stable", allow_empty_frames=True,
+                          anchor_reference=True)
+    video = dict(filename="optimized.mp4", fps=4, frame_fps=4, width=2, height=2,
+                 start_ms=2000, duration_ms=500, game_fps=60, requested_fps=4, requested_height=24)
+    plan["video"] = video.copy()
+    return dict(plan=plan, video=video, audio=b"OggS test audio")
 
 
 class DesktopVideoTests(unittest.TestCase):
@@ -71,12 +82,13 @@ class DesktopVideoTests(unittest.TestCase):
         self.assertEqual(self.app.plan["transition_ms"], 25)
         self.assertEqual(str(self.app.export_button["state"]), "normal")
 
-    def test_reference_video_round_trip_keeps_long_notes_and_pixel_skin_mode(self):
-        frames = [["." * 16] * 12, ["#" * 16] * 12]
-        plan = compile_frames(frames, 2000, 2000 + 2000 / 30,
-                              target_client="stable", reference_animation=True)
-        video = dict(filename="reference.mp4", fps=30, width=16, height=12,
-                     start_ms=2000, duration_ms=2000 / 30, reference_animation=True)
+    def test_eighteen_column_video_round_trip_keeps_audio_and_edit_semantics(self):
+        frames = [["#" + "." * 17] * 2, ["." * 17 + "#"] * 2]
+        windows = [(2000, 2240), (2250, 2500)]
+        plan = compile_frames(frames, frame_times=windows, fast_clear=True,
+                              target_client="stable", allow_empty_frames=True, anchor_reference=True)
+        video = dict(filename="wide-video.mp4", fps=4, width=18, height=2,
+                     start_ms=2000, duration_ms=500)
         plan["video"] = video.copy()
         self.app._apply_video(dict(plan=plan, video=video, audio=b"OggS test audio"))
         project = self.app._project_data()
@@ -85,27 +97,186 @@ class DesktopVideoTests(unittest.TestCase):
         self.assertEqual(self.app.plan, plan)
         with patch.object(self.app, "_cell_at", return_value=(0, 0)):
             self.app._begin_stroke(SimpleNamespace(num=3))
-            self.assertEqual(self.app.frames[0][0][0], "#")
-            self.app._begin_stroke(SimpleNamespace(num=1))
             self.assertEqual(self.app.frames[0][0][0], ".")
+            self.app._begin_stroke(SimpleNamespace(num=1))
+            self.assertEqual(self.app.frames[0][0][0], "#")
         self.assertEqual(self.app.audio_data, b"OggS test audio")
         self.app.load_text("\n---\n".join("\n".join(f) for f in frames))
         self.app._refresh_preview()
         self.assertEqual(self.app.plan, plan)
 
-    def test_reference_preset_populates_fields_and_reaches_importer(self):
+    def test_wide_video_options_reach_importer_without_special_mode(self):
         self.open_video_dialog()
-        for widget in self.app.import_dialog.winfo_children()[0].winfo_children():
-            if "text" in widget.keys() and str(widget["text"]).startswith("Bad Apple"):
-                widget.invoke()
-                break
-        self.assertTrue(self.app.video_reference.get())
-        self.assertEqual([self.app.video_fields[k].get() for k in ("fps", "width", "height")], ["30", "16", "12"])
+        for key, value in dict(fps="4", width="18", height="2").items():
+            self.app.video_fields[key].set(value)
+        self.app.video_target.set("stable")
         with patch("osu_paint_desktop.read_video", return_value=video_result()) as importer:
             self.app.video_start_button.invoke()
             self.wait_for(lambda: not self.app.importing)
-        self.assertTrue(importer.call_args.kwargs["reference_animation"])
+        self.assertEqual(importer.call_args.kwargs["width"], 18)
+        self.assertEqual(importer.call_args.kwargs["fps"], 4)
         self.assertEqual(importer.call_args.kwargs["target_client"], "stable")
+        self.assertNotIn("reference_animation", importer.call_args.kwargs)
+
+    def test_game_fps_options_show_actual_quality_and_pass_original_requests(self):
+        self.open_video_dialog()
+        self.app.video_target.set("stable")
+        self.assertTrue(self.app.video_game_sync.get())
+        self.assertEqual(self.app.video_game_fps.get(), "60")
+        for key, value in dict(fps="17", width="18", height="24").items():
+            self.app.video_fields[key].set(value)
+        effective = resolve_video_options(fps=17, width=18, height=24, start_ms=2000,
+                                          scroll_speed=27, target_client="stable", game_fps=60)
+        self.assertIn(f"18 × {effective['height']} 行", self.app.video_effective_label.get())
+        self.assertIn(f"{effective['fps']:g} FPS", self.app.video_effective_label.get())
+        self.assertIn("请求 18 × 24 行 · 17 FPS", self.app.video_effective_label.get())
+        self.assertIn("需要游戏限帧和刷新对齐", self.app.video_effective_label.get())
+        self.assertEqual(self.app.video_fields["height"].get(), "24")
+        self.assertEqual(self.app.video_fields["fps"].get(), "17")
+        preview = {"frame": [".#", "#."], "source_ppm": b"P6\n1 1\n255\n\xff\xff\xff",
+                   "frame_index": 0, "time_ms": 0}
+        with patch("osu_paint_desktop.preview_video_frame", return_value=preview) as reader:
+            self.app.video_preview_button.invoke()
+            self.wait_for(lambda: not self.app.importing)
+        with patch("osu_paint_desktop.read_video", return_value=video_result()) as importer:
+            self.app.video_start_button.invoke()
+            self.wait_for(lambda: not self.app.importing)
+        for call in (reader.call_args, importer.call_args):
+            self.assertEqual({key: call.kwargs[key] for key in ("fps", "width", "height", "game_fps")},
+                             dict(fps=17, width=18, height=24, game_fps=60))
+
+    def test_lazer_does_not_send_game_fps_and_invalid_limit_prevents_import(self):
+        self.open_video_dialog()
+        self.app.video_target.set("stable")
+        self.app.video_game_fps.set("999")
+        self.assertIn("参数无效", self.app.video_effective_label.get())
+        with patch("osu_paint_desktop.messagebox.showerror") as report, \
+                patch("osu_paint_desktop.read_video") as importer:
+            self.app.video_start_button.invoke()
+        report.assert_called_once()
+        importer.assert_not_called()
+        self.app.video_target.set("lazer")
+        self.assertFalse(self.app.video_game_sync.get())
+        self.app.video_game_sync.set(True)
+        with patch("osu_paint_desktop.read_video", return_value=video_result()) as importer:
+            self.app.video_start_button.invoke()
+            self.wait_for(lambda: not self.app.importing)
+        self.assertNotIn("game_fps", importer.call_args.kwargs)
+
+    def test_game_fps_metadata_reopens_with_audio_and_actual_dimensions(self):
+        result = optimized_video_result()
+        self.app._apply_video(result)
+        saved = json.loads(json.dumps(self.app._project_data()))
+        self.app.load_text("#", keep_video=False)
+        self.app.load_project(saved)
+        self.app._refresh_preview()
+        self.assertEqual(self.app._project_data(), saved)
+        self.assertEqual(self.app.plan["video"], result["video"])
+        self.assertEqual(self.app.audio_data, b"OggS test audio")
+        self.assertEqual(str(self.app.export_button["state"]), "normal")
+        self.assertIn("游戏 60 FPS", self.app.status.get())
+        self.assertIn("需要游戏限帧和刷新对齐", self.app.status.get())
+
+    def test_switching_optimized_video_to_lazer_clears_alignment_and_reopens(self):
+        self.app._apply_video(optimized_video_result())
+        self.app.target_client.set("lazer")
+        for key in ("game_fps", "frame_fps", "requested_fps", "requested_height"):
+            self.assertNotIn(key, self.app.video)
+        self.assertIn("需重新导入视频才能重新对齐", self.app.status.get())
+        saved = copy.deepcopy(self.app._project_data())
+        self.app.load_project(saved)
+        self.app._refresh_preview()
+        self.assertIsNotNone(self.app.plan)
+        self.assertEqual(self.app._project_data(), saved)
+        self.assertEqual(self.app.audio_data, b"OggS test audio")
+
+    def test_resizing_optimized_video_clears_alignment_and_updates_dimensions(self):
+        self.app._apply_video(optimized_video_result())
+        text = "\n---\n".join("\n".join(["#" + "." * 16] * 3) for _ in range(2))
+        self.app.load_text(text)
+        self.assertEqual((self.app.video["width"], self.app.video["height"]), (17, 3))
+        for key in ("game_fps", "frame_fps", "requested_fps", "requested_height"):
+            self.assertNotIn(key, self.app.video)
+        self.assertIn("画布尺寸已改变", self.app.status.get())
+        saved = copy.deepcopy(self.app._project_data())
+        self.app.load_project(saved)
+        self.app._refresh_preview()
+        self.assertEqual(self.app._project_data(), saved)
+        self.assertIsNotNone(self.app.plan)
+        self.assertEqual(self.app.audio_data, b"OggS test audio")
+
+    def test_pseudo_optimized_project_rejects_height_that_would_be_silently_reduced(self):
+        self.app._apply_video(optimized_video_result())
+        before = copy.deepcopy(self.app._project_data())
+        invalid = copy.deepcopy(before)
+        invalid["video"]["height"] = 24
+        invalid["frames"] = [frame + [".."] * 22 for frame in invalid["frames"]]
+        with self.assertRaisesRegex(ValueError, "与实际画面不一致"):
+            self.app.load_project(invalid)
+        self.assertEqual(self.app._project_data(), before)
+
+    def test_removed_reference_project_is_rejected_without_reinterpreting_pixels(self):
+        self.app._apply_video(video_result())
+        before = copy.deepcopy(self.app._project_data())
+        legacy = copy.deepcopy(before)
+        legacy["video"]["reference_animation"] = True
+        with self.assertRaisesRegex(ValueError, "已撤销.*重新导入"):
+            self.app.load_project(legacy)
+        self.assertEqual(self.app._project_data(), before)
+
+    def test_optimized_playback_settings_require_overwrite_confirmation(self):
+        plan = compile_frames([["#.", ".."]], frame_times=[(2000, 2250)], fast_clear=True,
+                              target_client="stable", allow_empty_frames=True, anchor_reference=True)
+        video = dict(filename="optimized.mp4", fps=4, width=2, height=2,
+                     start_ms=2000, duration_ms=250, game_fps=60)
+        plan["video"] = video.copy()
+        self.app._apply_video(dict(plan=plan, video=video, audio=None))
+        with tempfile.TemporaryDirectory() as directory:
+            settings = Path(directory) / "播放设置.txt"
+            settings.write_text("keep", encoding="utf-8")
+            self.app.output_dir.set(directory)
+            with patch("osu_paint_desktop.messagebox.askyesno", return_value=False) as confirm:
+                self.app.export()
+            confirm.assert_called_once()
+            self.assertFalse(self.app.exporting)
+            self.assertEqual(settings.read_text(encoding="utf-8"), "keep")
+            self.app._apply_video(video_result())
+            with patch("osu_paint_desktop.messagebox.askyesno", return_value=False) as confirm:
+                self.app.export()
+            confirm.assert_called_once()
+            self.assertFalse(self.app.exporting)
+            self.assertEqual(settings.read_text(encoding="utf-8"), "keep")
+
+    def test_wide_canvas_and_text_work_without_video_metadata(self):
+        with patch("osu_paint_desktop.simpledialog.askinteger", side_effect=[17, 2]), \
+                patch("osu_paint_desktop.messagebox.showerror") as report:
+            self.app.new_pattern()
+        report.assert_not_called()
+        self.assertEqual(self.app.frames, [["." * 17] * 2])
+        with patch.object(self.app, "_cell_at", return_value=(0, 16)):
+            self.app._begin_stroke(SimpleNamespace(num=1))
+        self.app._refresh_preview()
+        self.assertEqual(self.app.plan["keys"], 17)
+        self.assertEqual(self.app.frames[0][0][-1], "#")
+        self.app.load_text("#" + "." * 17, keep_video=False)
+        self.app._refresh_preview()
+        self.assertEqual(self.app.plan["keys"], 18)
+        self.assertIsNone(self.app.video)
+        project = copy.deepcopy(self.app._project_data())
+        self.app.load_project(project)
+        self.app._refresh_preview()
+        self.assertEqual(self.app._project_data(), project)
+        self.assertEqual(str(self.app.export_button["state"]), "normal")
+
+    def test_unsupported_key_count_rejects_new_canvas_without_changes(self):
+        before = copy.deepcopy(self.app._project_data())
+        with patch("osu_paint_desktop.simpledialog.askinteger", return_value=19) as ask, \
+                patch("osu_paint_desktop.messagebox.showerror") as report:
+            self.app.new_pattern()
+        self.assertEqual(ask.call_count, 1)
+        self.assertEqual(ask.call_args.kwargs["maxvalue"], 18)
+        report.assert_called_once()
+        self.assertEqual(self.app._project_data(), before)
 
     def test_dialog_passes_custom_options_and_applies_audio_and_frames(self):
         result = video_result()
@@ -191,7 +362,7 @@ class DesktopVideoTests(unittest.TestCase):
     def test_bad_options_and_import_failure_preserve_existing_project(self):
         before = copy.deepcopy(self.app._project_data())
         self.open_video_dialog()
-        self.app.video_fields["width"].set("11")
+        self.app.video_fields["width"].set("19")
         with patch("osu_paint_desktop.messagebox.showerror"), patch("osu_paint_desktop.read_video") as importer:
             self.app.video_start_button.invoke()
             importer.assert_not_called()

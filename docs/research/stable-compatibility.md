@@ -2,7 +2,7 @@
 
 核查日期：2026-09-30。
 
-最新用户验收：25 ms 普通音符切帧方案仍有大量残影和下落，不满足所给 16K Bad Apple 参考。下面历史单元测试和几何检查不能视为该问题已修复。当前新增参考长条模式及独立皮肤，仍待游戏渲染验收。
+最新用户验收：此前 25 ms 普通音符方案仍有大量残影和下落。用户已要求删除预设、专属皮肤和长条，并选择保留原版 stable，通过帧率对齐尽量规避。当前实现改为适用于任意视频的游戏 FPS 参数、必要时降低行数及整数曲线；支持完整 1–18 列。历史检查不是游戏渲染验收。最新机制、原版 60 FPS 下限与反例见 [刷新约束记录](render-phase-constraints.md)。
 
 本机安装配置 `LastVersion` 为 `b20260412.1`，EXE 文件版本为 `1.3.3.8`，两者不是同一个版本字段。只读取安装与版本相关信息，没有读取或上传登录凭据。客户端可以启动；尝试实机检查时用户操作并最小化了窗口，随后按 Esc 停止电脑控制，已停止界面操作。当前没有游戏内图案位置验收结果。
 
@@ -11,9 +11,9 @@
 - [官方 osu 格式说明](https://osu.ppy.sh/wiki/en/Client/File_formats/osu_(file_format)#hit-objects) 把音符时间定义为整数毫秒。本模式遵守这一格式，不依赖小数音符时间。
 - [官方 mania 设置说明](https://osu.ppy.sh/wiki/en/Game_mode/osu%21mania#bpm-scaling-and-fixed-scroll-speed) 区分 BPM scaling 与 fixed scroll speed；fixed 仍接受谱面 BPM/SV 变化。要求关闭 Scale osu!mania scroll speed with BPM，不是启用恒速 MOD。
 - [官方 legacy 皮肤兼容代码](https://github.com/ppy/osu/blob/master/osu.Game/Skinning/LegacyManiaSkinConfiguration.cs) 记录默认判定线位置 402；[滚速兼容代码](https://github.com/ppy/osu/blob/master/osu.Game.Rulesets.Mania/UI/DrawableManiaRuleset.cs) 用 `11485 / scrollSpeed` 并按判定线高度校正。stable 模式采用传统默认基准 `11485 / scrollSpeed`。
-- 本次只读检查了本机 stable 二进制的 mania 移动变换：按有效 BPM 分段积分，移动变换的时间端点转换为整数。局部反编译材料位于 `build/stable-diagnostics/mania-manager.cs`、`mania-scroll.cs`、`timing-point.cs`；EXE 文件版本 1.3.3.8，SHA256 为 `C7B77C2F6FC458521114E06C197749601651E1BD4FEEBE503F457232702B16AB`。这支持整数控制点和分段布点方案，但没有核对所有客户端行为。继续保留红线 6–60000 ms、SV 0.01–10 的保守生成范围。
+- 本次只读检查了本机 stable 二进制的 mania 移动变换：按有效 BPM 分段积分，移动变换的时间端点转换为整数。局部反编译材料位于 `build/stable-diagnostics/mania-manager.cs`、`mania-scroll.cs`、`timing-point.cs`；EXE 文件版本 1.3.3.8，SHA256 为 `C7B77C2F6FC458521114E06C197749601651E1BD4FEEBE503F457232702B16AB`。这支持整数控制点和分段布点方案，但没有核对所有客户端行为。已核实 stable 正 beatLength 不受 lazer 的 6–60000 ms 钳制，当前生成器使用互异的正红线并保持 SV 0.01–10；此前保守范围属于历史实现。
 
-## 整数时间策略
+## 历史整数时间策略（已更新）
 
 旧方案将切帧拉长到 `2 × 行数` ms，用整屏匀速推进后反解音符时间并取整。默认滚速下 24 行因此需要 48 ms，取整仍会产生行位置误差。本次改为先安排整数行时间，再拟合分段 SV，保持真实 mania 音符。
 
@@ -31,7 +31,7 @@
 
 此前仅复用重复画面并降到 2 FPS 的方案没有缩短变化画面的 48 ms 切换，用户仍能看到明显滚动，因此要求重做。本次重写变化画面的整数布点与分段滚速，恢复 24 行 / 10 FPS：每 100 ms 展示 75 ms、切帧 25 ms。多行依然必须落在不同整数毫秒，变化画面的切换仍然存在，不能宣称零滚动或已通过实机验收。
 
-## 重做后的产物与验证
+## 历史普通音符产物与验证
 
 完整测试共 87 项通过，命令为 `.\.build-env\Scripts\python.exe -m unittest discover -s tests -v`。包含新回归：24 行的音符依次位于退场开始后 1–24 ms，展示开始位置误差小于百万分之一画面高度；1000 个变化帧维持参考 BPM；旧 10 FPS 项目可以打开并导出；真实 Tk 预览包含全部 24 行。
 
@@ -39,21 +39,11 @@
 
 桌面程序重新构建到 `dist/osu-paint.exe`，SHA256 为 `EDC305370C526812F2500DC5DE84D6E8E9F666BF8AF5EF384DACC3CA19233542`，打包日志位于 `build/stable-package.log`。归档检查确认包含编辑器、转换、音频模块与 FFmpeg；使用本次专用测试副本确认打包后的编辑器成功打开并正常关闭。实际游戏内的皮肤、滚速与渲染验收仍未完成；历史检查时用户已停止电脑控制，本次未继续控制其游戏窗口。
 
-## 参考长条模式（用户反馈后重做）
+## 已撤销的参考模式
 
-依据 [作者的实现说明](https://www.reddit.com/r/osugame/comments/10y6bqn/bad_apple_but_its_in_16k_osumania/)，参考效果使用 16×12、30 FPS、专用像素皮肤、普通音符及合并长条。通过 HTTP Range 重新取得原始 `.osu`，SHA256 仍为 `b46da731f581b90693d1fbd211132821ce19dd429942ce8905895a9121ce84ac`；未下载其中的音视频。本次生成器保留二值画面，亮部用白色舞台，暗部用真实黑色长条，合并同列连续暗像素。没有引入故事板或背景视频。
+上一版引入的参考预设、独立 `.osk` 及长条动画已按用户要求删除。对应模块、CLI 参数、界面选项和同步采样预览均已移除，普通预览继续按真实时间积分。旧参考产物不再代表当前功能。
 
-本机 timing-point 构造不对正 beatLength 应用 lazer 的 6–60000 钳制；参考 BPM 字典用精确 double 并累加整数持续时间。参考模式采用互异的 `1000000 + 帧索引` 慢红线，快红线也互异，并用范围内绿线补偿，使每个整数毫秒推进一行。0–进场前的 500 ms 红线持续时间比各互异组都长，参考 BPM 为 120。独立皮肤把判定线设为 480，固定滚速下满屏时间距离为 `480×600/(21×scroll)`；12 行切帧需 12 ms。普通模式继续使用此前保守范围。
-
-皮肤是单独的 `.osk`：16 列合为一个舞台、列间距与线宽为 0、白色列背景、黑色 stretch 长条、透明头尾，并把判定/Combo 提示移出画面。依据 [官方 skin.ini](https://osu.ppy.sh/wiki/en/Skinning/skin.ini) 和 [mania 资源说明](https://osu.ppy.sh/wiki/en/Skinning/osu%21mania)，音符贴图不支持谱面覆盖，不能仅把 skin.ini 放入 `.osz`。
-
-30 FPS 仅固定间隔，不能固定相位。帧内极慢展示约 21/22 ms，之后 12 ms 推进一屏。异步渲染仍可能采到混帧；固定 30 FPS 后也需要相位与时钟稳定。同步预览明确按影片时刻取样导出音符几何；关闭同步、暂停拖动则按真实时间显示滚动。回归要求同步时每帧正确，同时要求快段中确实能观察到混帧，防止通过藏音符伪装修复。谱面不具有控制游戏渲染时钟的接口。
-
-从本地原视频重新抽取 16×12、30 FPS，生成 6575 帧及 63173 个长条，输出到 `output/stable-reference-user-video/`。开始仍为 2000 ms；末帧结束为 221166 ms，比旧 10 FPS 重采样结束早 34 ms，源于采样周期变化。原 Ogg 字节保留。独立解析导出时间点与 LN 起止，按浮点 32 位分段积分检查展示开始、中间、末尾，共 3787200 个像素中心全部一致。真实 Tk 列覆盖回归及项目/音轨重开通过；这些不是游戏渲染证明。记录见同目录 `validation.json`。
-
-参考模式完成后全部 97 项测试通过，包含视频 30 FPS 解码、CLI 导出 `.osk`、黑场长条合并、Tk 实际绘制覆盖、旧长条头部跨帧保留、不同刷新相位的混帧，以及项目保存和画笔亮暗语义。新版 EXE SHA256 为 `32C3B252185943DADD83D5664B14D1BC4B2FFDD02E184076F56FE45CAFD848E6`；归档含新 `osu_paint_stable` 模块，专用测试副本确认编辑器打开和关闭。测试与打包日志为 `build/reference-tests.log`、`build/reference-package.log`。
-
-生成的玩法条件为 No Fail、相同滚速、向下滚动、关闭 BPM scaling、安装配套皮肤、固定 30 FPS，并核对刷新相位。native LN 头尾偏移、Miss 处理、实际裁剪和刷新抖动仍需客户端验证。没有继续控制用户已停止操作的游戏窗口。
+上一版要求设置 30 FPS 的建议错误：本机客户端的整数绑定将 `CustomFrameLimit` 限制在 60–999，30 会钳制为 60，29.97 会解析失败而回退默认值。自定义限帧也不能锁定相位；原版谱面只能尽量规避，不能保证零过渡。最新实现及核查位置见 [刷新约束记录](render-phase-constraints.md)。
 
 ## 转换预览验证
 

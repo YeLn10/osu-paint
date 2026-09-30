@@ -10,13 +10,14 @@ import unittest
 import wave
 import zipfile
 
-from osu_paint import compile_frames, compile_pattern, encode_osu, make_preview, parse_frames, parse_pattern, write_output
+from osu_paint import Point, compile_frames, compile_pattern, encode_osu, make_preview, minimum_transition_ms, most_common_beat_length, parse_frames, parse_pattern, write_output
 
 
 def decode(text):
     points, notes = [], []
     section = None
     beat, sv = 500, 1
+    stable = "Version: stable " in text
     for line in text.splitlines():
         if line.startswith("["):
             section = line
@@ -24,7 +25,7 @@ def decode(text):
             fields = line.split(",")
             time, value = map(float, fields[:2])
             if fields[6] == "1":
-                beat, sv = min(60000, max(6, value)), 1
+                beat, sv = (value if stable else min(60000, max(6, value))), 1
             else:
                 sv = min(10, max(0.01, -100 / value if value < 0 else 1))
             if points and points[-1][0] == time:
@@ -49,6 +50,84 @@ def position(points, time, time_range):
 
 
 class ExportTests(unittest.TestCase):
+    def test_stable_thirteen_rows_fit_sixty_fps_integer_periods(self):
+        starts = [2000 + math.floor(i * 1000 / 60) for i in range(61)]
+        windows = [(starts[i], starts[i + 1] - 14) for i in range(60)]
+        frames = [["#." if i % 2 == 0 else ".#"] * 13 for i in range(60)]
+        plan = compile_frames(frames, frame_times=windows, fast_clear=True, target_client="stable")
+        self.assertEqual(plan["transition_ms"], 14)
+        self.assertEqual([(f["start_ms"], f["end_ms"]) for f in plan["frames"]], windows)
+        self.assertTrue(all(f["end_ms"] - f["start_ms"] >= 1 for f in plan["frames"]))
+        self.assertEqual(plan["base_beat_length_ms"], 500)
+        points, _ = decode(encode_osu(plan))
+        for note in plan["notes"]:
+            frame = plan["frames"][note["frame"]]
+            y = 1 - position(points, note["time_ms"], plan["time_range_ms"]) + position(points, frame["start_ms"], plan["time_range_ms"])
+            self.assertAlmostEqual(y, note["y"], delta=1e-6)
+
+    def test_stable_minimum_sweep_is_rows_plus_one_at_every_scroll_speed(self):
+        for speed in (1, 15, 27, 40):
+            for height in (1, 3, 13, 24, 128):
+                with self.subTest(speed=speed, height=height):
+                    self.assertEqual(minimum_transition_ms(speed, "stable", height), height + 1)
+
+    def test_stable_accepts_one_ms_hold_without_reference_anchor(self):
+        plan = compile_frames([["#."] * 3, [".#"] * 3], frame_times=[(2000, 2001), (2005, 2006)],
+                              fast_clear=True, target_client="stable")
+        slow = [p for p in plan["points"] if p["sv"] == .01]
+        self.assertTrue(all(p["beat_length"] >= 1e9 for p in slow))
+        self.assertEqual(plan["base_beat_length_ms"], 500)
+        with self.assertRaisesRegex(ValueError, "1 ms"):
+            compile_frames([["#."] * 3, [".#"] * 3], frame_times=[(2000, 2000.4), (2005, 2006)],
+                           fast_clear=True, target_client="stable")
+
+    def test_stable_long_video_uses_distinct_exported_fast_red_lines(self):
+        frames = [["#." if i % 2 == 0 else ".#"] * 12 for i in range(1000)]
+        windows = [(2000 + i * 25, 2012 + i * 25) for i in range(1000)]
+        plan = compile_frames(frames, frame_times=windows, scroll_speed=1, fast_clear=True, target_client="stable")
+        points, notes = decode(encode_osu(plan))
+        fast = [beat for _, beat, sv in points if sv > 1]
+        self.assertEqual(len(fast), len(set(fast)))
+        self.assertTrue(all(5 <= sv <= 10 for _, _, sv in points if sv > 1))
+        self.assertTrue(any(beat < 6 for beat in fast))
+        durations = {}
+        for i, (time, beat, _) in enumerate(points):
+            end = min(points[i + 1][0] if i + 1 < len(points) else notes[-1][1], notes[-1][1])
+            if end > time:
+                durations[beat] = durations.get(beat, 0) + int(end - time)
+        self.assertEqual(max(durations, key=durations.get), 500)
+
+    def test_reference_bpm_grouping_matches_each_client(self):
+        points = [Point(0, 500, 1), Point(100, 60000.0001, .01), Point(170, 60000.0002, .01)]
+        self.assertEqual(most_common_beat_length(points, 230, target_client="stable"), 500)
+        self.assertEqual(most_common_beat_length(points, 230), 60000)
+
+    def test_stable_explicit_gaps_keep_all_four_fast_segments_within_sv_bounds(self):
+        frames = [["#." if i % 2 == 0 else ".#"] * 3 for i in range(20)]
+        windows = [(2000 + i * 100, 2001 + i * 100) for i in range(20)]
+        plan = compile_frames(frames, frame_times=windows, fast_clear=True, target_client="stable")
+        fast = [p for p in plan["points"] if p["sv"] > 1]
+        self.assertEqual(len(fast), 4 * len(frames))
+        self.assertTrue(all(5 <= p["sv"] <= 10 for p in fast))
+        self.assertEqual(len({p["beat_length"] for p in fast}), len(fast))
+        points, _ = decode(encode_osu(plan))
+        for note in plan["notes"]:
+            start = plan["frames"][note["frame"]]["start_ms"]
+            y = 1 - position(points, note["time_ms"], plan["time_range_ms"]) + position(points, start, plan["time_range_ms"])
+            self.assertAlmostEqual(y, note["y"], delta=1e-6)
+
+    def test_all_one_to_eighteen_columns_export_as_plain_notes(self):
+        for keys in range(1, 19):
+            for client in ("stable", "lazer"):
+                with self.subTest(keys=keys, client=client):
+                    plan = compile_frames([["#" * keys]], 2000, 4000,
+                                          target_client=client, fast_clear=True)
+                    objects = encode_osu(plan).split("[HitObjects]\n")[1].strip().splitlines()
+                    columns = [int(int(line.split(",")[0]) * keys / 512) for line in objects]
+                    self.assertEqual(columns, list(range(keys)))
+                    self.assertTrue(all(line.split(",")[3] == "1" for line in objects))
+                    self.assertFalse(any("end_ms" in note for note in plan["notes"]))
+
     def test_stable_identical_frames_keep_the_picture_through_the_transition(self):
         picture = ["."] * 11 + ["#"] + ["."] * 12
         windows = [(2000, 2052), (2100, 2200)]
@@ -108,7 +187,7 @@ class ExportTests(unittest.TestCase):
                                           scroll_speed=speed, fast_clear=True, target_client="stable")
                     points, _ = decode(encode_osu(plan))
                     self.assertTrue(all(a[0] < b[0] for a, b in zip(points, points[1:])))
-                    self.assertTrue(all(6 <= beat <= 60000 and .01 <= sv <= 10 for _, beat, sv in points))
+                    self.assertTrue(all(math.isfinite(beat) and beat > 0 and .01 <= sv <= 10 for _, beat, sv in points))
                     for note in plan["notes"]:
                         frame = plan["frames"][note["frame"]]
                         y = 1 - position(points, note["time_ms"], plan["time_range_ms"])
@@ -152,8 +231,7 @@ class ExportTests(unittest.TestCase):
         for index, (start, beat, _) in enumerate(points[:-1]):
             end = min(points[index + 1][0], notes[-1][1])
             if end > start:
-                key = round(beat, 3)
-                durations[key] = durations.get(key, 0) + end - start
+                durations[beat] = durations.get(beat, 0) + int(end) - int(start)
         self.assertEqual(max(durations, key=durations.get), 500)
         self.assertEqual(len(notes), 24000)
         self.assertTrue(all(t == int(t) for _, t in notes))
@@ -341,7 +419,7 @@ class ExportTests(unittest.TestCase):
         self.assertAlmostEqual(drift, plan["drift_at_658px"], delta=1e-4)
 
     def test_invalid_patterns(self):
-        for text in ("", "..", "#\n##", "x", "# #", "#" * 11):
+        for text in ("", "..", "#\n##", "x", "# #", "#" * 19):
             with self.subTest(text=text), self.assertRaises(ValueError):
                 parse_pattern(text)
 
@@ -392,6 +470,23 @@ class ExportTests(unittest.TestCase):
                 self.assertEqual(archive.read("audio.ogg"), audio)
                 self.assertIn("AudioFilename: audio.ogg", archive.read("pattern.osu").decode())
             self.assertFalse((output / "silence.wav").exists())
+
+    def test_aligned_video_exports_playback_settings_outside_osz(self):
+        plan = compile_frames([["#" * 18] * 13], 2000, 3000, fast_clear=True, target_client="stable")
+        plan["video"] = {"game_fps": 60, "fps": 30, "height": 13,
+                         "requested_fps": 50, "requested_height": 24}
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            write_output(plan, output)
+            settings = (output / "播放设置.txt").read_text(encoding="utf-8")
+            for value in ("60 FPS", "30 FPS", "请求 50 FPS", "18 列 × 13 行", "请求 24 行",
+                          "FrameSync=Custom", "CustomFrameLimit=60", "固定滚速 27", "NF", "刷新相位"):
+                self.assertIn(value, settings)
+            with zipfile.ZipFile(output / "pattern.osz") as archive:
+                self.assertNotIn("播放设置.txt", archive.namelist())
+            del plan["video"]
+            write_output(plan, output)
+            self.assertFalse((output / "播放设置.txt").exists())
 
     def test_video_metadata_cannot_break_out_of_preview_script(self):
         plan = compile_pattern(["#"], 2000, 3000)
