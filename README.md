@@ -46,6 +46,22 @@
 
 ### stable 实验兼容
 
+要接近 [16K Bad Apple 作者演示](https://www.reddit.com/r/osugame/comments/10y6bqn/bad_apple_but_its_in_16k_osumania/)，导入原视频时勾选 **“Bad Apple 参考预设”**：设置为 stable、16×12、30 FPS，使用黑色长条填充像素、白色舞台显示亮部，合并连续黑色像素对应的长条。旧的普通音符模式只缩短滚动时间，用户反馈仍有大量残影，不能作为达到参考效果的方案。
+
+参考模式会另行导出 **`pixel-film.osk`** 和 **`播放说明.txt`**。先安装并选择 `osu-paint Pixel Film` 皮肤，再导入 `.osz`；使用相同滚速、向下滚动、No Fail，关闭随 BPM 缩放。mania 音符贴图不能通过谱面皮肤自动覆盖，因此皮肤需要单独安装。[官方 mania 皮肤说明](https://osu.ppy.sh/wiki/en/Skinning/osu%21mania)
+
+游戏渲染需固定 **30 FPS**：关闭游戏后，在自己的 `osu!.用户名.cfg` 中设置 `FrameSync = Custom`、`CustomFrameLimit = 30`，保存后重开，实际游玩时检查 FPS。[官方自定义帧率步骤](https://osu.ppy.sh/wiki/en/Performance_troubleshooting#custom)
+
+**30 FPS 不会自动锁定刷新相位。** 12 行的滚动换帧仍需 12 ms；刷新落在这段里时，仍会看到下落和混帧。作者方法依赖刷新避开快段，不能由谱面保证任意客户端都零残影。可以调整共同开始时间重新导入进行对齐，但掉帧、时钟抖动仍需实机验证。桌面与 HTML 播放默认启用标明的“30 FPS 同步”几何采样；关闭同步或暂停拖动会显示真实过渡，并未在输出中隐藏音符。完整产物位于 `output/stable-reference-user-video/`，目前通过导出几何与打包检查，**尚未通过用户客户端的游戏渲染验收**。
+
+参考模式中 `#` 仍表示亮像素，`.` 表示暗像素；亮部由舞台背景显示，暗部生成长条。画布显示黑白，右键恢复白色背景。该模式允许 1–10、12、14、16、18 列，最多 31 行；推荐 16×12。视频项目保存其模式与音轨，TXT 不保留模式。纯白动画没有音符，不能导出有效谱面。
+
+```powershell
+python osu_paint.py "D:\Videos\clip.mp4" --video --reference-animation --target-client stable --fps 30 --width 16 --height 12 --start-ms 2000 --output output/reference-film
+```
+
+以下是继续保留的普通音符实验模式，其滚动切换仍可见：
+
 主界面时间设置旁或视频导入弹窗可选择 `stable`；选择后会按传统默认判定线基准计算滚动距离，输出整数毫秒音符与控制点时间，目标也会写入谱面难度名称和项目。游戏内关闭 **Scale osu!mania scroll speed with BPM**，使用固定滚速、向下滚动、相同滚速值以及 No Fail。自定义皮肤判定线和音符尺寸仍可能改变实际效果。
 
 stable 模式先给各行安排不同的整数毫秒时间，再计算“下方边距、行间、上方清场”三段滚速；展示期间的微小漂移也计入布点。默认滚速 27 下，24 行最短切帧由 **48 ms 缩至 25 ms**，每 100 ms 可完整展示 **75 ms**，支持 **10 FPS**；6 行切帧为 7 ms。低滚速可能需要更长时间。取消之前人为加入的 10% 切帧占比限制，保留参考 BPM 所需的展示长度检查：每帧展示至少为切帧时长 + 2 ms。切帧仍可见，不能宣称与 lazer 亚毫秒切帧效果相同。开始与结束时间逐帧取整，均分模式从下一帧开始反算前帧结束，避免取整挤掉 1 ms；音轨不重定时。

@@ -8,6 +8,7 @@ import tempfile
 import threading
 import time
 import tkinter as tk
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import zipfile
@@ -69,6 +70,42 @@ class DesktopVideoTests(unittest.TestCase):
         self.assertIsNotNone(self.app.plan)
         self.assertEqual(self.app.plan["transition_ms"], 25)
         self.assertEqual(str(self.app.export_button["state"]), "normal")
+
+    def test_reference_video_round_trip_keeps_long_notes_and_pixel_skin_mode(self):
+        frames = [["." * 16] * 12, ["#" * 16] * 12]
+        plan = compile_frames(frames, 2000, 2000 + 2000 / 30,
+                              target_client="stable", reference_animation=True)
+        video = dict(filename="reference.mp4", fps=30, width=16, height=12,
+                     start_ms=2000, duration_ms=2000 / 30, reference_animation=True)
+        plan["video"] = video.copy()
+        self.app._apply_video(dict(plan=plan, video=video, audio=b"OggS test audio"))
+        project = self.app._project_data()
+        self.app.load_project(json.loads(json.dumps(project)))
+        self.app._refresh_preview()
+        self.assertEqual(self.app.plan, plan)
+        with patch.object(self.app, "_cell_at", return_value=(0, 0)):
+            self.app._begin_stroke(SimpleNamespace(num=3))
+            self.assertEqual(self.app.frames[0][0][0], "#")
+            self.app._begin_stroke(SimpleNamespace(num=1))
+            self.assertEqual(self.app.frames[0][0][0], ".")
+        self.assertEqual(self.app.audio_data, b"OggS test audio")
+        self.app.load_text("\n---\n".join("\n".join(f) for f in frames))
+        self.app._refresh_preview()
+        self.assertEqual(self.app.plan, plan)
+
+    def test_reference_preset_populates_fields_and_reaches_importer(self):
+        self.open_video_dialog()
+        for widget in self.app.import_dialog.winfo_children()[0].winfo_children():
+            if "text" in widget.keys() and str(widget["text"]).startswith("Bad Apple"):
+                widget.invoke()
+                break
+        self.assertTrue(self.app.video_reference.get())
+        self.assertEqual([self.app.video_fields[k].get() for k in ("fps", "width", "height")], ["30", "16", "12"])
+        with patch("osu_paint_desktop.read_video", return_value=video_result()) as importer:
+            self.app.video_start_button.invoke()
+            self.wait_for(lambda: not self.app.importing)
+        self.assertTrue(importer.call_args.kwargs["reference_animation"])
+        self.assertEqual(importer.call_args.kwargs["target_client"], "stable")
 
     def test_dialog_passes_custom_options_and_applies_audio_and_frames(self):
         result = video_result()

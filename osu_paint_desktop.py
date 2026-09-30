@@ -15,6 +15,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from osu_paint import Point, Timeline, compile_frames, number, parse_frames, write_output
 from osu_paint_video import ImportCancelled, import_video as read_video, preview_video_frame, validate_video_options
 from osu_paint_audio import AudioPreview
+from osu_paint_stable import ReferenceGeometry, reference_sample_time
 
 
 HEART = [".##.##.", "#######", "#######", ".#####.", "..###..", "...#..."]
@@ -190,6 +191,9 @@ class PaintApp:
         self.play_button = ttk.Button(playback, text="▶ 播放", command=self.toggle_play)
         self.play_button.pack(side="left")
         ttk.Button(playback, text="回到当前帧", command=self.seek_selected).pack(side="left", padx=8)
+        self.reference_sync = tk.BooleanVar(value=True)
+        self.reference_sync_button = ttk.Checkbutton(playback, text="30 FPS 同步", variable=self.reference_sync,
+                                                     command=self._draw_preview)
         self.time_label = tk.StringVar()
         ttk.Label(right, textvariable=self.time_label, style="Muted.TLabel").grid(row=5, column=0, sticky="w", pady=(8, 4))
         ttk.Label(right, text="近似停帧 · 向下滚动 · 同步游戏滚速 · 开启 No Fail。\nstable 为实验兼容，关闭随 BPM 缩放；高行数需降低 FPS。",
@@ -256,7 +260,8 @@ class PaintApp:
                             "极速清场：自动用合法最高速度计算时长，覆盖手动切帧值；滚速 27 时约 0.575 ms。不能保证零过渡画面。\n\n"
                             "stable：整数毫秒音符，各行先排整数时间，再计算分段滚速。连续相同画面复用音符。\n"
                             "stable 使用分段滚速；默认滚速下 24 行切帧为 25 ms，可使用 10 FPS。仍有滚动切换。\n"
-                            "采用传统皮肤默认判定线模型，需关闭随 BPM 缩放；尚未实机验收。\n\n"
+                            "参考动画预设：16×12、30 FPS、黑色长条和白色舞台；需安装配套皮肤。\n"
+                            "仅同步刷新可跳过切帧滚动，未同步时仍会看见过渡；尚未实机验收。\n\n"
                             "游戏滚速：必须与游戏设置一致。它决定时间距离如何换算成舞台位置，不是动画帧率；"
                             "更改后会重新计算音符与变速点，不会改变你填写的展示时间。\n\n"
                             "保存为 JSON 项目可保留全部时间与参数；TXT 仅保存图案。",
@@ -268,12 +273,15 @@ class PaintApp:
 
     def _update_editor(self):
         rows = self.frames[self.selected]
+        reference = self.video is not None and self.video.get("reference_animation", False)
         self.editor_info.set(f"{len(rows[0])}K  ·  {len(rows)} 行  ·  第 {self.selected + 1} / {len(self.frames)} 帧")
         self.frame_list.delete(0, "end")
         items = []
         for i, frame in enumerate(self.frames):
             timing = f"  ·  {self.frame_times[i][0]}–{self.frame_times[i][1]} ms" if self.timing_mode.get() == "自由模式" else ""
-            items.append(f"  {i + 1:02d}    {'●' if i == self.selected else '○'}    {sum(row.count('#') for row in frame)} 个音符{timing}")
+            count = sum(row.count('.' if reference else '#') for row in frame)
+            items.append(f"  {i + 1:02d}    {'●' if i == self.selected else '○'}    {count} "
+                         f"{'个黑色像素' if reference else '个音符'}{timing}")
         self.frame_list.insert("end", *items)
         self.frame_list.selection_set(self.selected)
         self.frame_list.see(self.selected)
@@ -292,11 +300,13 @@ class PaintApp:
         self.canvas.delete("all")
         x, y, size = self._grid_geometry()
         gap = min(2 * self.scale, size / 8)
+        reference = self.video is not None and self.video.get("reference_animation", False)
         for r, row in enumerate(self.frames[self.selected]):
             for c, pixel in enumerate(row):
                 self.canvas.create_rectangle(x + c * size + gap, y + r * size + gap,
                                              x + (c + 1) * size - gap, y + (r + 1) * size - gap,
-                                             fill=ACCENT if pixel == "#" else "#253146", outline="")
+                                             fill=("white" if pixel == "#" else "black") if reference else
+                                                  (ACCENT if pixel == "#" else "#253146"), outline="")
         for c in range(len(self.frames[self.selected][0])):
             self.canvas.create_text(x + (c + 0.5) * size, y + len(self.frames[self.selected]) * size + 14 * self.scale,
                                     text=str(c + 1), fill=MUTED, font=("Segoe UI", 9))
@@ -311,7 +321,9 @@ class PaintApp:
         cell = self._cell_at(event)
         if cell is not None:
             row, col = cell
-            self.stroke_value = "." if event.num == 3 or self.frames[self.selected][row][col] == "#" else "#"
+            reference = self.video is not None and self.video.get("reference_animation", False)
+            on, off = (".", "#") if reference else ("#", ".")
+            self.stroke_value = off if event.num == 3 or self.frames[self.selected][row][col] == on else on
             self._paint(event)
 
     def _paint(self, event):
@@ -339,7 +351,8 @@ class PaintApp:
 
     def add_frame(self, duplicate=False):
         rows = self.frames[self.selected]
-        frame = rows.copy() if duplicate else ["." * len(rows[0]) for _ in rows]
+        blank = "#" if self.video is not None and self.video.get("reference_animation") else "."
+        frame = rows.copy() if duplicate else [blank * len(rows[0]) for _ in rows]
         try:
             start, end = map(float, self.frame_times[self.selected])
             gap = self.plan["transition_ms"] if self.plan is not None else 12
@@ -379,7 +392,9 @@ class PaintApp:
             self._changed()
 
     def load_text(self, text, *, keep_video=True):
-        frames = parse_frames(text, allow_empty=keep_video and self.video is not None)
+        reference = keep_video and self.video is not None and self.video.get("reference_animation", False)
+        frames = parse_frames(text, allow_empty=keep_video and self.video is not None,
+                              max_width=18 if reference else 10)
         if keep_video and self.video is not None:
             if len(frames[0]) > 128:
                 raise ValueError("视频项目的画面高度须为 1–128 行。")
@@ -426,7 +441,7 @@ class PaintApp:
                     raise ValueError("项目中的视频信息无效。")
                 validate_video_options(fps=video["fps"], width=video["width"], height=video["height"],
                                        start_ms=video["start_ms"], scroll_speed=float(data["settings"]["scroll_speed"]),
-                                       target_client=target_client)
+                                       target_client=target_client, reference_animation=video.get("reference_animation", False))
                 if not math.isfinite(video["duration_ms"]) or video["duration_ms"] <= 0:
                     raise ValueError("项目中的视频时长无效。")
                 if data["audio"] is not None:
@@ -435,7 +450,7 @@ class PaintApp:
                         raise ValueError("项目中的音轨无效。")
                 video = video.copy()
             frames = parse_frames("\n---\n".join("\n".join(frame) for frame in data["frames"]),
-                                  allow_empty=video is not None)
+                                  allow_empty=video is not None, max_width=18 if video is not None and video.get("reference_animation") else 10)
             if video is not None and (len(frames[0]), len(frames[0][0])) != (video["height"], video["width"]):
                 raise ValueError("视频分辨率与项目画面不一致。")
             windows = data["frame_times"]
@@ -482,7 +497,8 @@ class PaintApp:
 
     def save_pattern(self):
         try:
-            parse_frames(self._text(), allow_empty=self.video is not None)
+            parse_frames(self._text(), allow_empty=self.video is not None,
+                         max_width=18 if self.video is not None and self.video.get("reference_animation") else 10)
         except ValueError as error:
             messagebox.showerror("图案还不能保存", str(error), parent=self.root)
             return
@@ -537,7 +553,7 @@ class PaintApp:
         inputs = []
         for row, (key, label, value) in enumerate([
                 ("fps", "每秒帧数 / FPS（可填小数，≤60）", "10"),
-                ("width", "画面宽度 / 按键列（1–10）", "10"),
+                ("width", "画面宽度 / 按键列", "10"),
                 ("height", "画面高度 / 行（1–128）", "24"),
                 ("start_ms", "视频与音乐开始 / ms", self.uniform_times[0]),
                 ("threshold", "黑白阈值 / 0–255", "128"),
@@ -549,7 +565,7 @@ class PaintApp:
             entry.grid(row=row, column=1, sticky="ew", pady=5)
             inputs.append(entry)
         self.video_invert = tk.BooleanVar(value=False)
-        invert = ttk.Checkbutton(panel, text="亮暗反转（暗部生成音符）", variable=self.video_invert)
+        invert = ttk.Checkbutton(panel, text="亮暗反转", variable=self.video_invert)
         invert.grid(row=8, column=0, columnspan=2, sticky="w", pady=5)
         inputs.append(invert)
         self.video_fit = tk.StringVar(value="拉伸")
@@ -560,14 +576,23 @@ class PaintApp:
             combo = ttk.Combobox(panel, textvariable=variable, values=choices, state="readonly", width=12)
             combo.grid(row=row, column=1, pady=5)
             inputs.append(combo)
-        ttk.Label(panel, text="亮度／对比度调整后按阈值转换。stable：默认滚速下 24 行可使用 10 FPS。\n预览帧序号按所填 FPS 采样，从 1 开始；不会改变导入范围。",
-                  style="Muted.TLabel", wraplength=400).grid(row=11, column=0, columnspan=2, sticky="w", pady=(12, 8))
+        self.video_reference = tk.BooleanVar(value=False)
+        def reference_preset():
+            if self.video_reference.get():
+                for key, value in dict(fps="30", width="16", height="12").items():
+                    self.video_fields[key].set(value)
+                self.video_target.set("stable")
+        preset = ttk.Checkbutton(panel, text="Bad Apple 参考预设：16×12 / 30 FPS（需专用皮肤）",
+                                 variable=self.video_reference, command=reference_preset)
+        preset.grid(row=11, column=0, columnspan=2, sticky="w", pady=(12, 8))
+        inputs.append(preset)
         self.video_frame_index = tk.StringVar(value="1")
         ttk.Label(panel, text="预览帧序号 / 从 1 开始", style="Muted.TLabel").grid(row=12, column=0, sticky="w")
         frame_entry = ttk.Entry(panel, textvariable=self.video_frame_index, width=12)
         frame_entry.grid(row=12, column=1)
         inputs.append(frame_entry)
-        for variable in [*self.video_fields.values(), self.video_invert, self.video_fit, self.video_frame_index, self.video_target]:
+        for variable in [*self.video_fields.values(), self.video_invert, self.video_fit, self.video_frame_index,
+                         self.video_target, self.video_reference]:
             variable.trace_add("write", lambda *args: self.video_preview_label.set("参数或帧已修改，请点击预览刷新。"))
         self.import_status = tk.StringVar(value="导入会替换当前画布；失败或取消时保留原项目。")
         ttk.Label(panel, textvariable=self.import_status, wraplength=480, style="Muted.TLabel").grid(
@@ -594,6 +619,8 @@ class PaintApp:
                 options.update(invert=self.video_invert.get(),
                                fit={"拉伸": "stretch", "等比留边": "contain", "等比裁剪": "cover"}[self.video_fit.get()],
                                target_client=self.video_target.get())
+                if self.video_reference.get():
+                    options["reference_animation"] = True
                 validate_video_options(**options)
                 frame_index = int(self.video_frame_index.get()) - 1 if preview else None
             except ValueError as error:
@@ -768,13 +795,15 @@ class PaintApp:
                         raise ValueError("每一帧的开始和结束时间都必须填写数字。") from None
                 self.plan = compile_frames(self.frames, **values, frame_times=windows, fast_clear=self.fast_clear.get(),
                                             allow_empty_frames=self.video is not None, anchor_reference=self.video is not None,
-                                            target_client=self.target_client.get())
+                                            target_client=self.target_client.get(),
+                                            reference_animation=self.video is not None and self.video.get("reference_animation", False))
             if self.video is not None:
                 self.plan["video"] = self.video.copy()
         except ValueError as error:
             self.plan = None
             self._status(str(error), error=True)
         if self.plan is not None:
+            self.reference_geometry = ReferenceGeometry(self.plan) if self.plan.get("reference_animation") else None
             self.timeline = Timeline([Point(**point) for point in self.plan["points"]])
             self.note_distances = [self.timeline.position(note["time_ms"]) for note in self.plan["notes"]]
             self.frame_starts = [frame["start_ms"] for frame in self.plan["frames"]]
@@ -786,6 +815,12 @@ class PaintApp:
                          f"{'极速' if self.fast_clear.get() else ''}切帧 {self.plan['transition_ms']:.3f} ms · "
                          f"单帧最大预计漂移 {self.plan['drift_at_658px']:.4f} px / 658 px"
                          + (" · 已带视频音轨" if self.audio_data is not None else ""))
+            if self.plan.get("reference_animation"):
+                self._status(f"{self.plan['keys']}×{len(self.plan['pattern'])} · {len(self.frames)} 帧 · "
+                             f"{len(self.plan['notes'])} 长条 · 需配套皮肤、30 FPS 同步刷新、NF")
+                self.reference_sync_button.pack(side="left")
+            else:
+                self.reference_sync_button.pack_forget()
         state = "normal" if self.plan is not None else "disabled"
         self.play_button.configure(state=state)
         self.seek.configure(state=state)
@@ -798,6 +833,9 @@ class PaintApp:
         if self.plan is None:
             self.preview.create_text(width / 2, height / 2, text="画好图案并填写有效参数后\n这里会显示舞台预览", fill=MUTED, justify="center")
             self.time_label.set("等待有效图案与参数")
+            return
+        if self.plan.get("reference_animation"):
+            self._draw_reference_preview(width, height)
             return
         full_h = max(1, height - 34 * self.scale)
         stage_h = full_h * 658 / 768
@@ -831,6 +869,22 @@ class PaintApp:
         frame = index + 1 if holding else None
         phase = f"第 {frame} / {len(self.frames)} 帧" if frame is not None else "空档 / 进场 / 换帧 / 退场"
         self.time_label.set(f"{current:,.2f} ms   ·   {phase}")
+
+    def _draw_reference_preview(self, width, height):
+        stage_w = max(1, min(width - 24 * self.scale, (height - 34 * self.scale) * 4 / 3))
+        stage_h = stage_w * 3 / 4
+        left, top = (width - stage_w) / 2, (height - stage_h) / 2
+        self.preview.create_rectangle(left, top, left + stage_w, top + stage_h,
+                                      fill="white", outline="", tags="film")
+        current = self.seek_time.get()
+        sampled = reference_sample_time(self.plan, current) if self.playing and self.reference_sync.get() else current
+        lane = stage_w / self.plan["keys"]
+        for column, y0, y1 in self.reference_geometry.rectangles(sampled):
+            self.preview.create_rectangle(left + column * lane, top + y0 * stage_h,
+                                          left + (column + 1) * lane, top + y1 * stage_h,
+                                          fill="black", outline="", tags="note")
+        mode = "30 FPS 同步采样" if self.playing and self.reference_sync.get() else "真实时间几何"
+        self.time_label.set(f"{current:,.2f} ms · {mode} ({sampled:,.2f} ms)")
 
     def _seek_changed(self, value):
         self._stop()
@@ -889,7 +943,9 @@ class PaintApp:
                 else:
                     self.last_output = output
                     self.folder_button.configure(state="normal")
-                    self._status(f"已导出：{output / 'pattern.osz'} · 可拖入 lazer；也已生成 HTML 预览与报告。")
+                    self._status(f"已导出：{output / 'pattern.osz'} · 参考动画还需安装 pixel-film.osk 并锁定 30 FPS。"
+                                 if self.plan is not None and self.plan.get("reference_animation") else
+                                 f"已导出：{output / 'pattern.osz'} · 也已生成 HTML 预览与报告。")
         self.tick_job = self.root.after(16 if self.playing else 80, self._tick)
 
     def choose_output(self):
@@ -911,6 +967,8 @@ class PaintApp:
             output = Path(self.output_dir.get()).expanduser().resolve()
             names = tuple("audio.ogg" if name == "silence.wav" and self.audio_data is not None else name
                           for name in OUTPUT_FILES)
+            if self.plan.get("reference_animation"):
+                names += ("pixel-film.osk", "播放说明.txt")
             exists = any((output / name).exists() for name in names)
         except (OSError, ValueError) as error:
             self._status(f"导出目录无效：{error}", error=True)

@@ -100,6 +100,31 @@ class VideoImportTests(unittest.TestCase):
         self.assertTrue(all(len(f["pattern"]) == 5 and len(f["pattern"][0]) == 3
                             for f in smaller["plan"]["frames"]))
 
+    def test_reference_import_resamples_to_thirty_fps_and_preserves_audio(self):
+        options = dict(fps=30, width=16, height=12, target_client="stable", reference_animation=True)
+        result = self.load(**options)
+        plan = result["plan"]
+        self.assertEqual(len(plan["frames"]), 30)
+        self.assertEqual([f["start_ms"] for f in plan["frames"][:4]], [2000, 2033, 2066, 2100])
+        self.assertTrue(result["video"]["reference_animation"])
+        self.assertTrue(result["audio"].startswith(b"OggS"))
+        self.assertTrue(all(n["end_ms"] > n["time_ms"] for n in plan["notes"]))
+        preview = preview_video_frame(self.source, frame_index=10, **options)
+        self.assertEqual(preview["frame"], plan["frames"][10]["pattern"])
+        black = self.load(self.black, **options)
+        self.assertEqual(len(black["plan"]["notes"]), 16)
+
+    def test_reference_cli_exports_skin_and_actual_long_notes(self):
+        output = self.directory / "reference-cli"
+        subprocess.run([sys.executable, "osu_paint.py", str(self.source), "--video", "--reference-animation",
+                        "--target-client", "stable", "--fps", "30", "--width", "16", "--height", "12",
+                        "--start-ms", "2000", "--output", str(output)],
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        with zipfile.ZipFile(output / "pattern.osz") as archive:
+            self.assertIn(b",128,0,", archive.read("pattern.osu"))
+            self.assertTrue(archive.read("audio.ogg").startswith(b"OggS"))
+        self.assertTrue((output / "pixel-film.osk").is_file())
+
     def test_audio_includes_import_offset_and_original_stream_delay(self):
         result = self.load()
         output = self.directory / "export"

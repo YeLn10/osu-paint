@@ -18,11 +18,13 @@ class ImportCancelled(Exception):
 
 
 def validate_video_options(*, fps, width, height, start_ms, scroll_speed, target_client="lazer",
-                           threshold=128, brightness=0, contrast=1, invert=False, fit="stretch"):
+                           threshold=128, brightness=0, contrast=1, invert=False, fit="stretch",
+                           reference_animation=False):
     if not math.isfinite(fps) or not 0 < fps <= 60:
         raise ValueError("视频 FPS 须大于 0 且不超过 60，可以填写小数。")
-    if not isinstance(width, int) or not 1 <= width <= 10:
-        raise ValueError("视频宽度须为 1–10 列；每列对应一个 mania 按键列。")
+    if not isinstance(width, int) or not (1 <= width <= 10 or
+                                         reference_animation and width in (12, 14, 16, 18)):
+        raise ValueError("视频宽度须为 1–10 列；参考动画也支持 12、14、16、18 列。")
     if not isinstance(height, int) or not 1 <= height <= 128:
         raise ValueError("视频高度须为 1–128 行。")
     if not math.isfinite(threshold) or not 0 <= threshold <= 255:
@@ -33,10 +35,17 @@ def validate_video_options(*, fps, width, height, start_ms, scroll_speed, target
         raise ValueError("对比度须大于 0 且不超过 5。")
     if not isinstance(invert, bool) or fit not in ("stretch", "contain", "cover"):
         raise ValueError("反转或缩放方式无效。")
-    transition = minimum_transition_ms(scroll_speed, target_client, height)
+    if not isinstance(reference_animation, bool):
+        raise ValueError("参考动画选项必须为布尔值。")
+    if reference_animation:
+        if target_client != "stable" or fps != 30 or height > 31:
+            raise ValueError("参考动画需要 stable、30 FPS，最多 31 行；推荐 16×12。")
+        if not math.isfinite(scroll_speed) or not 1 <= scroll_speed <= 40:
+            raise ValueError("游戏滚速须在 1–40 之间。")
+    transition = height if reference_animation else minimum_transition_ms(scroll_speed, target_client, height)
     if not math.isfinite(start_ms) or start_ms - transition < 100:
         raise ValueError("视频开始时间须为有限数值，并在进场前保留至少 100 ms。")
-    if target_client == "stable" and math.floor(1000 / fps) < 2 * transition + 2:
+    if not reference_animation and target_client == "stable" and math.floor(1000 / fps) < 2 * transition + 2:
         maximum_fps = math.floor(1000000 / (2 * transition + 2)) / 1000
         raise ValueError(f"stable 的 {height} 行画面至少需要 {2 * transition + 2:g} ms / 帧；"
                          f"FPS 须不超过 {maximum_fps:.3f}，或降低行数。")
@@ -62,10 +71,11 @@ def _pixel_frame(block, width, *, threshold=128, brightness=0, contrast=1, inver
 
 def preview_video_frame(path, *, frame_index=0, fps=10, width=10, height=24, start_ms=2000,
                         scroll_speed=27, target_client="lazer", threshold=128, brightness=0,
-                        contrast=1, invert=False, fit="stretch", cancel=None):
+                        contrast=1, invert=False, fit="stretch", cancel=None, reference_animation=False):
     validate_video_options(fps=fps, width=width, height=height, start_ms=start_ms,
                            scroll_speed=scroll_speed, target_client=target_client, threshold=threshold,
-                           brightness=brightness, contrast=contrast, invert=invert, fit=fit)
+                           brightness=brightness, contrast=contrast, invert=invert, fit=fit,
+                           reference_animation=reference_animation)
     if not isinstance(frame_index, int) or not 0 <= frame_index < MAX_VIDEO_FRAMES:
         raise ValueError(f"预览帧序号须在 1–{MAX_VIDEO_FRAMES} 之间。")
     with tempfile.TemporaryDirectory(prefix="osu-paint-preview-") as directory:
@@ -124,10 +134,11 @@ def _run_ffmpeg(arguments, cancel):
 
 def import_video(path, *, fps=10, width=10, height=24, start_ms=2000, scroll_speed=27,
                  progress=None, cancel=None, target_client="lazer", threshold=128, brightness=0,
-                 contrast=1, invert=False, fit="stretch"):
+                 contrast=1, invert=False, fit="stretch", reference_animation=False):
     transition = validate_video_options(fps=fps, width=width, height=height,
                                         start_ms=start_ms, scroll_speed=scroll_speed, target_client=target_client,
-                                        threshold=threshold, brightness=brightness, contrast=contrast, invert=invert, fit=fit)
+                                        threshold=threshold, brightness=brightness, contrast=contrast, invert=invert, fit=fit,
+                                        reference_animation=reference_animation)
     path = Path(path).expanduser().resolve()
     if not path.is_file():
         raise ValueError("请选择存在的本地视频文件。")
@@ -163,13 +174,14 @@ def import_video(path, *, fps=10, width=10, height=24, start_ms=2000, scroll_spe
             frames.append(_pixel_frame(block, width, threshold=threshold, brightness=brightness,
                                        contrast=contrast, invert=invert))
         period = 1000 / fps
-        windows = [(start_ms + i * period,
-                    start_ms + (i + 1) * period - (transition if i < count - 1 else 0))
+        starts = [math.floor(start_ms + i * period + 1e-7) if reference_animation else start_ms + i * period
+                  for i in range(count + 1)]
+        windows = [(starts[i], starts[i + 1] - (transition if i < count - 1 else 0))
                    for i in range(count)]
         report("正在编译谱面与视频时间轴…")
         plan = compile_frames(frames, scroll_speed=scroll_speed, frame_times=windows,
                               fast_clear=True, allow_empty_frames=True, anchor_reference=True,
-                              target_client=target_client)
+                              target_client=target_client, reference_animation=reference_animation)
         audio_data = None
         if re.search(r"^\s*Stream #0:\d+.*Audio:", log, re.MULTILINE):
             report("正在提取音乐并对齐视频开始时间…（可取消）")
@@ -186,5 +198,7 @@ def import_video(path, *, fps=10, width=10, height=24, start_ms=2000, scroll_spe
     video = {"filename": path.name, "fps": fps, "width": width, "height": height,
              "start_ms": start_ms, "duration_ms": count * period,
              "threshold": threshold, "brightness": brightness, "contrast": contrast, "invert": invert, "fit": fit}
+    if reference_animation:
+        video["reference_animation"] = True
     plan["video"] = video.copy()
     return {"plan": plan, "audio": audio_data, "video": video}

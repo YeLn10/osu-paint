@@ -38,10 +38,10 @@ class Timeline:
         return self.times[i] + (distance - self.distances[i]) / self.speeds[i]
 
 
-def parse_pattern(text, *, allow_empty=False):
+def parse_pattern(text, *, allow_empty=False, max_width=10):
     rows = text.strip().splitlines()
-    if not rows or not 1 <= len(rows[0]) <= 10:
-        raise ValueError("图案宽度须为 1–10 列（初版使用单舞台）。")
+    if not rows or not 1 <= len(rows[0]) <= max_width:
+        raise ValueError(f"图案宽度须为 1–{max_width} 列。")
     if any(len(row) != len(rows[0]) or set(row) - {"#", "."} for row in rows):
         raise ValueError("图案每行必须等宽，只能使用 # 和 .。")
     if not allow_empty and not any("#" in row for row in rows):
@@ -49,7 +49,7 @@ def parse_pattern(text, *, allow_empty=False):
     return rows
 
 
-def parse_frames(text, *, allow_empty=False):
+def parse_frames(text, *, allow_empty=False, max_width=10):
     """Separate equally sized text frames with a line containing --- ."""
     blocks = [[]]
     for line in text.strip().splitlines():
@@ -57,7 +57,7 @@ def parse_frames(text, *, allow_empty=False):
             blocks.append([])
         else:
             blocks[-1].append(line)
-    frames = [parse_pattern("\n".join(block), allow_empty=allow_empty) for block in blocks]
+    frames = [parse_pattern("\n".join(block), allow_empty=allow_empty, max_width=max_width) for block in blocks]
     if any((len(frame), len(frame[0])) != (len(frames[0]), len(frames[0][0]))
            for frame in frames):
         raise ValueError("动画的所有帧必须具有相同的行数和列数。")
@@ -107,11 +107,17 @@ def minimum_transition_ms(scroll_speed, target_client="lazer", height=1):
 
 def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transition_ms=12,
                    *, frame_times=None, fast_clear=False, allow_empty_frames=False,
-                   anchor_reference=False, target_client="lazer"):
+                   anchor_reference=False, target_client="lazer", reference_animation=False):
     if not frames:
         raise ValueError("至少需要一帧图案。")
     frames = parse_frames("\n---\n".join("\n".join(rows) for rows in frames),
-                          allow_empty=allow_empty_frames)
+                          allow_empty=allow_empty_frames or reference_animation,
+                          max_width=18 if reference_animation else 10)
+    if reference_animation:
+        if target_client != "stable":
+            raise ValueError("参考动画模式仅支持 osu!stable，需要配套皮肤和锁定 30 FPS。")
+        from osu_paint_stable import compile_reference_frames
+        return compile_reference_frames(frames, start_ms, end_ms, scroll_speed, frame_times)
     if not all(math.isfinite(v) for v in (scroll_speed, transition_ms)):
         raise ValueError("时间和滚速必须是有限数值。")
     if not 1 <= scroll_speed <= 40:
@@ -332,11 +338,17 @@ def encode_osu(plan, audio_filename="silence.wav"):
     lines.extend(["", "[HitObjects]"])
     for note in plan["notes"]:
         x = int((note["column"] + 0.5) * 512 / plan["keys"])
-        lines.append(f"{x},192,{number(note['time_ms'])},1,0,0:0:0:0:")
+        if "end_ms" in note:
+            lines.append(f"{x},192,{number(note['time_ms'])},128,0,{number(note['end_ms'])}:0:0:0:0:")
+        else:
+            lines.append(f"{x},192,{number(note['time_ms'])},1,0,0:0:0:0:")
     return "\n".join(lines) + "\n"
 
 
 def make_preview(plan):
+    if plan.get("reference_animation"):
+        from osu_paint_stable import make_reference_preview
+        return make_reference_preview(plan)
     # Geometry preview only: native skins, object lifetime and judgement aren't simulated.
     data = json.dumps(plan, ensure_ascii=False).replace("<", "\\u003c")
     pattern = html.escape("\n".join(plan["pattern"]))
@@ -395,20 +407,24 @@ def write_output(plan, output, *, audio_data=None):
             archive.write(output / name, name)
     (output / "report.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
     (output / "preview.html").write_text(make_preview(plan), encoding="utf-8")
+    if plan.get("reference_animation"):
+        from osu_paint_stable import write_reference_skin
+        write_reference_skin(plan, output)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="用文本像素图生成 osu!mania lazer 近似停帧谱面。")
+    parser = argparse.ArgumentParser(description="用文本像素图或视频生成 osu!mania 音符动画。")
     parser.add_argument("pattern", type=Path, help="文本图案；配合 --video 时为本地视频文件")
     parser.add_argument("--video", action="store_true", help="导入视频及音轨，自动使用极速清场")
     parser.add_argument("--fps", type=float, default=10, help="视频每秒帧数，可填小数，默认 10")
-    parser.add_argument("--width", type=int, default=10, help="视频画面宽度 / 按键列，1–10，默认 10")
+    parser.add_argument("--width", type=int, default=10, help="视频列数，普通模式 1–10；参考模式支持 16，默认 10")
     parser.add_argument("--height", type=int, default=24, help="视频画面高度 / 行，1–128，默认 24")
     parser.add_argument("--target-client", choices=("lazer", "stable"), default="lazer", help="stable 为实验整数时间兼容")
+    parser.add_argument("--reference-animation", action="store_true", help="stable 像素长条动画，需配套皮肤并锁定 30 FPS")
     parser.add_argument("--threshold", type=float, default=128, help="视频黑白阈值，0–255")
     parser.add_argument("--brightness", type=float, default=0, help="视频亮度偏移，-255–255")
     parser.add_argument("--contrast", type=float, default=1, help="视频对比度，>0–5")
-    parser.add_argument("--invert", action="store_true", help="暗部生成音符")
+    parser.add_argument("--invert", action="store_true", help="交换画面亮暗")
     parser.add_argument("--fit", choices=("stretch", "contain", "cover"), default="stretch", help="拉伸、等比留边、等比裁剪")
     parser.add_argument("--start-ms", type=float, required=True, help="完整展示开始时间（ms）")
     parser.add_argument("--end-ms", type=float, help="文本图案必填；视频结束时间由 FPS 与实际帧数确定")
@@ -425,20 +441,22 @@ def main():
             result = import_video(args.pattern, fps=args.fps, width=args.width, height=args.height,
                                   start_ms=args.start_ms, scroll_speed=args.scroll_speed, target_client=args.target_client,
                                   threshold=args.threshold, brightness=args.brightness, contrast=args.contrast,
-                                  invert=args.invert, fit=args.fit)
+                                  invert=args.invert, fit=args.fit, reference_animation=args.reference_animation)
             plan = result["plan"]
             write_output(plan, args.output, audio_data=result["audio"])
         else:
             if args.end_ms is None:
                 raise ValueError("文本图案需要 --end-ms。")
-            frames = parse_frames(args.pattern.read_text(encoding="utf-8-sig"))
+            frames = parse_frames(args.pattern.read_text(encoding="utf-8-sig"),
+                                  allow_empty=args.reference_animation, max_width=18 if args.reference_animation else 10)
             plan = compile_frames(frames, args.start_ms, args.end_ms, args.scroll_speed, args.transition_ms,
-                                  fast_clear=args.fast_clear, target_client=args.target_client)
+                                  fast_clear=args.fast_clear, target_client=args.target_client,
+                                  reference_animation=args.reference_animation)
             write_output(plan, args.output)
     except (ValueError, OSError) as error:
         parser.error(str(error))
     print(f"已生成 {args.output.resolve() / 'pattern.osz'}")
-    print(f"{plan['keys']}K / {len(plan['frames'])} 帧 / {len(plan['notes'])} 音符 / lazer 滚速 {number(args.scroll_speed)}")
+    print(f"{plan['keys']}K / {len(plan['frames'])} 帧 / {len(plan['notes'])} 音符 / 游戏滚速 {number(args.scroll_speed)}")
     print(f"单帧最大预计漂移 {plan['drift_at_658px']:.4f} px（658 px 高度），不是精确零速。")
 
 
