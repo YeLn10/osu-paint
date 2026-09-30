@@ -1,10 +1,10 @@
 # stable / lazer 刷新约束、长条与规避
 
-核查日期：2026-09-30。保留原版 stable，并为 stable / lazer 增加实际刷新率排帧和可选的连续单键转长条。不生成专属皮肤或内容预设，预览不按理想刷新采样隐藏过渡。下方旧整数游戏 FPS 方案及产物仅作为历史记录。
+核查日期：2026-09-30。保留原版 stable，并为 stable / lazer 增加实际刷新率排帧和可选的连续单键转长条。生成器不强制绑定皮肤或内容预设，预览不按理想刷新采样隐藏过渡。独立可选的 Pixel Film 皮肤现已修复，见 [皮肤说明](../skin.md)。下方旧整数游戏 FPS 方案及产物仅作为历史记录。
 
 ## 版本和证据
 
-本机 `osu!.exe` 文件版本 `1.3.3.8`，安装配置记录 `b20260412.1`，SHA256：`C7B77C2F6FC458521114E06C197749601651E1BD4FEEBE503F457232702B16AB`。局部反编译材料保存在忽略的 `build/stable-diagnostics/`，没有读取或上传登录凭据。本记录仅将实际检查到的客户端行为用于生成，不能外推为所有 stable 版本。
+本机 `osu!.exe` 文件版本 `1.3.3.8`，安装配置记录 `b20260412.1`，SHA256：`C7B77C2F6FC458521114E06C197749601651E1BD4FEEBE503F457232702B16AB`。局部反编译材料原存于忽略的 `build/stable-diagnostics/`，现已按用户要求清理缓存；下文路径与行号保留为历史核查位置。没有读取或上传登录凭据。本记录仅将实际检查到的客户端行为用于生成，不能外推为所有 stable 版本。
 
 - `mania-manager.cs:537–546` 使用整数音符判定时间；691、724 将移动变换端点转为整数。同列不同高度的音符不能共用判定时间，否则重叠。H 行至少需要 H−1 ms，再加进出场边距，本生成器采用 H+1 ms。
 - `timing-point.cs:36–49` 不对正红线 beatLength 使用 lazer 的 6–60000 ms 钳制。`mania-scroll.cs:66,109–114` 的固定滚速仍接受有效 BPM 和 SV；关闭 BPM scaling 不等于忽略变速点。
@@ -13,9 +13,9 @@
 
 ## 列数
 
-支持完整的 1–18 列，包括 11、13、15、17。`beatmap.cs:912–916` 将 mania CircleSize 限制在 1–18；`native-mania-stage-manager.cs:1010–1012` 直接取谱面列数。`native-skin-main.cs:448–465` 在没有对应配置时新建 `SkinMania(CS)`；`native-skin-mania.cs:90–107,221–235` 按实际列数创建数组并提供默认贴图。因此 [skin.ini 文档](https://osu.ppy.sh/wiki/en/Skinning/skin.ini) 列出的皮肤配置键列表不是谱面列数白名单。
+本机 stable 支持完整的 1–18 列，包括 11、13、15、17。`beatmap.cs:912–916` 将 mania CircleSize 限制在 1–18；`native-mania-stage-manager.cs:1010–1012` 直接取谱面列数。`native-skin-main.cs:448–465` 在没有对应配置时新建 `SkinMania(CS)`；`native-skin-mania.cs:90–107,221–235` 按实际列数创建数组并提供默认贴图。因此 [skin.ini 文档](https://osu.ppy.sh/wiki/en/Skinning/skin.ini) 列出的皮肤配置键列表不是谱面列数白名单。这一结论不适用于原版 lazer 的奇数高键数转换，差异见 [皮肤说明](../skin.md#lazer-限制2026-09-30-核查)。
 
-原版默认对大于 9 列分成两个舞台：`native-mania-stage-manager.cs:359–361,407–410,913–928`。11 列为 6+5，13 为 7+6，15 为 8+7，17 为 9+8。增加列数不保证形成无间隙的单幅矩形；实际布局与像素比例仍受皮肤影响。没有生成或强制专属皮肤。
+stable 默认对大于 9 列分成两个舞台：`native-mania-stage-manager.cs:359–361,407–410,913–928`。11 列为 6+5，13 为 7+6，15 为 8+7，17 为 9+8。增加列数不保证形成无间隙的单幅矩形；实际布局与像素比例仍受皮肤影响。现有 Pixel Film 皮肤为 1–16K 显式设置 `SplitStages: 0`，在 stable 合并舞台；lazer 暂未实现这一选项。
 
 ## 为什么不能保证零过渡
 

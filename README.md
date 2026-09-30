@@ -75,6 +75,14 @@ python osu_paint.py "D:\Videos\clip.mp4" --video --target-client stable --refres
 
 该请求实际约为 18×13、9.99000999 FPS；`--refresh-phase-ms 2` 可另加 2 ms 画面偏移。lazer 可用相同刷新率参数。旧版 `--game-fps 60` 和已有整数游戏 FPS 项目仍兼容，但不能与 `--refresh-hz` 同用，也不能代表 59.94 Hz 的显示时钟。已有 `.osz` 不会自动更新，需要重新导入／导出。验证依据及实机限制见 [刷新约束与验证记录](docs/research/render-phase-constraints.md)。
 
+### Pixel Film 皮肤（1–16K）
+
+双击 [pixel-film.osk](pixel-film.osk) 导入并选择 **osu-paint Pixel Film**。白色轨道上显示黑色短音符和长条；每个 1–16K 均有独立配置。stable 的 10–16K 通过 `SplitStages: 0` 合并为连续单舞台，列间距与边框均隐藏。已有同名皮肤需要覆盖并重新载入。
+
+原版 lazer 尚未实现该皮肤拆分选项；它的转换器对 >9K 强制双舞台，并会将 11/13/15K 转为少一列的偶数键数。单独导入皮肤不能解除这个客户端限制。构建方式、配置依据和验证边界见 [皮肤说明](docs/skin.md)。
+
+项目维护约束见 [AGENTS.md](AGENTS.md)，模块与数据流见 [架构文档](docs/architecture.md)。
+
 ### 自由模式与参数含义
 
 可打开 `examples/free.json` 体验三帧时间表：2000–2500 ms、3000–4500 ms、4501–6000 ms。首帧在 2500 ms 开始退场，第二帧在 3000 ms 完整到位；中间留出空档。第三帧与第二帧间隔很短，会共用一次推进。
