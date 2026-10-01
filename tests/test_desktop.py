@@ -67,6 +67,14 @@ class DesktopTests(unittest.TestCase):
         x1, y1, x2, y2 = self.app.preview.coords(items[0])
         self.assertGreater(y2 - y1, 20)
 
+    def test_help_describes_only_mania_playback(self):
+        with patch("osu_paint_desktop.messagebox.showinfo") as info:
+            self.app.explain_timing()
+        help_text = info.call_args.args[1]
+        self.assertNotIn("补丁", help_text)
+        self.assertIn(">10K", help_text)
+        self.assertIn("pixel-film*.osk", help_text)
+
     def test_initial_preview_reuses_compiler(self):
         self.assertEqual(self.app.plan, compile_frames([HEART], 2000, 4000, fast_clear=True))
         self.assertFalse(self.app.dirty)

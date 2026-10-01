@@ -288,7 +288,7 @@ class ExportTests(unittest.TestCase):
             output = Path(directory)
             write_output(plan, output, audio_data=audio)
             with zipfile.ZipFile(output / "pattern.osz") as archive:
-                self.assertEqual(set(archive.namelist()), {"pattern.osu", "pixel-film.osu", "audio.ogg", "pixel-film.json"})
+                self.assertEqual(set(archive.namelist()), {"pattern.osu", "audio.ogg"})
                 self.assertEqual(archive.read("audio.ogg"), audio)
                 self.assertIn("AudioFilename: audio.ogg", archive.read("pattern.osu").decode())
             self.assertFalse((output / "silence.wav").exists())
@@ -301,6 +301,8 @@ class ExportTests(unittest.TestCase):
             output = Path(directory)
             write_output(plan, output)
             settings = (output / "播放设置.txt").read_text(encoding="utf-8")
+            self.assertNotIn("Pixel Film 模式", settings)
+            self.assertNotIn("补丁", settings)
             for value in ("60 Hz", "固定滚速 27", "NF", "自动安排换帧"):
                 self.assertIn(value, settings)
             with zipfile.ZipFile(output / "pattern.osz") as archive:
@@ -317,6 +319,19 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(preview.count("</script>"), 1)
         self.assertIn(r"\u003c/script>", preview)
 
+    def test_export_preserves_old_film_files_without_packaging_them(self):
+        plan = compile_pattern(["#"], 500, 2500)
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            old_files = {"pixel-film.osu": b"old entry", "pixel-film.json": b"old frames"}
+            for name, data in old_files.items():
+                (output / name).write_bytes(data)
+            write_output(plan, output)
+            for name, data in old_files.items():
+                self.assertEqual((output / name).read_bytes(), data)
+            with zipfile.ZipFile(output / "pattern.osz") as archive:
+                self.assertEqual(set(archive.namelist()), {"pattern.osu", "silence.wav"})
+
     def test_osz_is_self_contained(self):
         plan = compile_pattern(["#.", "##"], 500, 2500)
         with tempfile.TemporaryDirectory() as directory:
@@ -324,9 +339,13 @@ class ExportTests(unittest.TestCase):
             write_output(plan, output)
             with zipfile.ZipFile(output / "pattern.osz") as archive:
                 self.assertIsNone(archive.testzip())
-                self.assertEqual(set(archive.namelist()), {"pattern.osu", "pixel-film.osu", "silence.wav", "pixel-film.json"})
+                self.assertEqual(set(archive.namelist()), {"pattern.osu", "silence.wav"})
                 self.assertEqual(archive.read("pattern.osu").decode().splitlines(),
                                  encode_osu(plan).splitlines())
+                self.assertIn("Mode: 3", archive.read("pattern.osu").decode())
+                self.assertNotIn("osu-paint-film-v1", archive.read("pattern.osu").decode())
+            self.assertFalse((output / "pixel-film.osu").exists())
+            self.assertFalse((output / "pixel-film.json").exists())
             with wave.open(str(output / "silence.wav")) as audio:
                 self.assertGreater(audio.getnframes() / audio.getframerate(),
                                    plan["notes"][-1]["time_ms"] / 1000)

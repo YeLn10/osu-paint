@@ -21,7 +21,7 @@ from osu_paint_skin import DEFAULT_ASPECT_RATIO, SKIN_PROFILES
 
 
 HEART = [".##.##.", "#######", "#######", ".#####.", "..###..", "...#..."]
-OUTPUT_FILES = ("pattern.osz", "pattern.osu", "pixel-film.osu", "silence.wav", "pixel-film.json", "preview.html", "report.json", *SKIN_PROFILES)
+OUTPUT_FILES = ("pattern.osz", "pattern.osu", "silence.wav", "preview.html", "report.json", *SKIN_PROFILES)
 BG = "#101522"
 PANEL = "#192131"
 INK = "#edf1fa"
@@ -194,7 +194,7 @@ class PaintApp:
         ttk.Button(playback, text="回到当前帧", command=self.seek_selected).pack(side="left", padx=8)
         self.time_label = tk.StringVar()
         ttk.Label(right, textvariable=self.time_label, style="Muted.TLabel").grid(row=5, column=0, sticky="w", pady=(8, 4))
-        ttk.Label(right, text="Pixel Film 补丁模式：1–18 列完整画面直接切换。\n原版 mania：同步滚速并开启 NF；>10K 仍有拆分／少列限制。",
+        ttk.Label(right, text="仅支持 lazer · 向下滚动 · 同步游戏滚速 · 开启 No Fail。\n原版 lazer 的 >10K 仍会拆分，11/13/15/17K 会少一列。",
                   style="Muted.TLabel", font=("Microsoft YaHei UI", 9)).grid(row=6, column=0, sticky="w", pady=(6, 0))
 
         footer = ttk.Frame(self.root, padding=(24, 18, 24, 16))
@@ -276,8 +276,7 @@ class PaintApp:
                             "游戏滚速：必须与游戏设置一致。它决定时间距离如何换算成舞台位置，不是动画帧率；"
                             "更改后会重新计算音符与变速点，不会改变你填写的展示时间。\n\n"
                             "导出后请导入同目录中匹配屏幕比例的 pixel-film*.osk；默认 16:10，黑块高度匹配画布行数。\n"
-                            "皮肤按屏幕比例均分列宽；原版 lazer 的 >10K 仍会拆分。\n"
-                            "可选 Pixel Film 补丁模式直接显示完整帧，保留 1–18 列，无需皮肤、NF 或相位调节。\n\n"
+                            "皮肤按屏幕比例均分列宽；原版 lazer 的 >10K 仍会拆分。\n\n"
                             "保存为 JSON 项目可保留全部时间与参数；TXT 仅保存图案。",
                             parent=self.root)
 
