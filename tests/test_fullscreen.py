@@ -15,6 +15,50 @@ from test_skin import mania_sections
 
 
 class FullScreenTests(unittest.TestCase):
+    def test_sweep_keeps_constant_black_area_without_a_wide_white_band(self):
+        for height in (1, 3, 24, 128):
+            for speed in (1, 27, 40):
+                for merged in (False, True):
+                    with self.subTest(height=height, speed=speed, holds=merged):
+                        plan = compile_frames([["#."] * height, [".#"] * height], 2000, 4000,
+                                              scroll_speed=speed, fast_clear=True, merge_holds=merged)
+                        text = encode_osu(plan)
+                        points, _ = decode(text)
+                        rectangles = []
+                        for line in text.split("[HitObjects]\n")[1].splitlines():
+                            fields = line.split(",")
+                            head = float(fields[2])
+                            tail = float(fields[5].split(":")[0]) if fields[3] == "128" else head
+                            rectangles.append((int(fields[0]),
+                                               position(points, head, plan["time_range_ms"]),
+                                               position(points, tail, plan["time_range_ms"])))
+                        first, second = plan["frames"]
+                        current = position(points, first["entry_start_ms"], plan["time_range_ms"])
+                        self.assertTrue(all(1 - head + current <= 1e-6 for _, head, _ in rectangles))
+                        areas = []
+                        for step in range(101):
+                            now = first["end_ms"] + (second["start_ms"] - first["end_ms"]) * step / 100
+                            current = position(points, now, plan["time_range_ms"])
+                            area = 0
+                            for _, head, tail in rectangles:
+                                bottom, top = 1 - head + current, 1 - tail + current - 1 / height
+                                area += max(0, min(1, bottom) - max(0, top)) / 2
+                            areas.append(area)
+                        self.assertGreaterEqual(min(areas), .495)
+                        self.assertLessEqual(max(areas), .501)
+                        # Tight packing must still fully clear the previous frame at the boundary.
+                        current = position(points, second["start_ms"], plan["time_range_ms"])
+                        for column, _, tail in rectangles:
+                            if column < 256:
+                                self.assertGreaterEqual(1 - tail + current - 1 / height, 1 - 1e-6)
+
+    def test_tighter_sweep_preserves_saved_video_frame_times(self):
+        windows = [(2000, 2050 - .671), (2050, 2100)]
+        plan = compile_frames([["#."] * 3, [".#"] * 3], frame_times=windows, fast_clear=True)
+        self.assertEqual([(frame["start_ms"], frame["end_ms"]) for frame in plan["frames"]], windows)
+        self.assertEqual(plan["frames"][0]["exit_end_ms"], windows[1][0])
+        self.assertEqual(plan["frames"][1]["entry_start_ms"], windows[0][1])
+
     def test_native_bottom_anchors_fill_rows_and_stay_unjudged_during_display(self):
         for height in (1, 3, 24, 128):
             plan = compile_frames([["#"] * height] * 3, 2000, 3000, fast_clear=True)

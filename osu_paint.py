@@ -17,6 +17,8 @@ from osu_paint_skin import DEFAULT_ASPECT_RATIO, build_skins
 
 SUPPORTED_KEY_COUNTS = tuple(range(1, 19))
 PLAYFIELD_HEIGHT = 768
+# Clear the bottom-anchor inset plus one internal pixel for rounding, not a 10% white band.
+SWEEP_HEIGHT = 1 + 2 / PLAYFIELD_HEIGHT
 SCROLL_SPEED = 27
 
 
@@ -98,7 +100,7 @@ def minimum_transition_ms(scroll_speed=SCROLL_SPEED):
         raise ValueError("lazer 滚速须在 1–40 之间。")
     time_range = 11485 / scroll_speed * 480 / 402
     # Lazer's maximum legal speed is 500 / 6 * 10. Round UP to avoid exceeding it.
-    minimum = math.ceil(1.1 * time_range / (500 / 6 * 10) * 1000) / 1000
+    minimum = math.ceil(SWEEP_HEIGHT * time_range / (500 / 6 * 10) * 1000) / 1000
     return minimum
 
 
@@ -138,8 +140,8 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
         raise ValueError("切帧时长必须大于 0。")
     if fast_clear:
         transition_ms = minimum
-    # A transition moves 1.1 complete playfield heights, including edge margins.
-    fast_multiplier = 1.1 * time_range / transition_ms
+    # One full stage plus the bottom-anchor clearance; shared frames almost touch.
+    fast_multiplier = SWEEP_HEIGHT * time_range / transition_ms
     fast_beat = 500 * 10 / fast_multiplier
     if not 6 <= fast_beat <= 60000:
         raise ValueError("换帧时间超出 lazer 合法 BPM 范围；请调整 --transition-ms。")
