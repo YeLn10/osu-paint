@@ -20,6 +20,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File dist/pixel-film-patch/manage
 
 更新补丁时先运行卸载，再安装新包。官方客户端升级后，补丁指纹校验会拒绝旧包。仍可卸载旧补丁；新版本需先核对 API、重新适配和测试，再更新 `client_patch/compatibility.json`，不能仅删掉版本检查。
 
+## 启动加载失败修复（2026-10-01）
+
+若启动时提示 Pixel Film 加载失败，日志中的调用链为 `RealmRulesetStore.testRulesetCompatibility` → `FilmBeatmapConverter.ConvertBeatmap`，并报 `Re-export this map with osu-paint`，原因是旧补丁误拒绝了客户端启动自检的空谱面，不是影片本身损坏。
+
+目标客户端会直接转换一个空 `Beatmap`，不先调用 `CanConvert()`。补丁现在仅对无音符、无 Source 的空探针返回合法的单列空舞台，不生成片尾标记；`CanConvert()` 与选曲过滤仍拒绝非影片，带音符的普通谱面、损坏的影片标记及帧文件校验规则保持不变。关闭游戏后按上面的卸载、安装步骤更新补丁；已有包含 `pixel-film.osu` 和 `pixel-film.json` 的正确导出无需重导。
+
+回归直接调用目标程序集的真实启动兼容性检查，使用不连接数据库的隔离对象；另检查空探针不被视为可播放影片、无额外完成标记，以及非影片和损坏标记仍被拒绝。旧补丁在该检查中复现同一异常，修复后通过；此检查不等于游戏窗口及 GPU 显示验收。
+
 ## 完整帧显示
 
 导出新增 `pixel-film.json` 和 `pixel-film.osu`，同时放入 `.osz`。帧文件包含版本、列数、行数、原有时间窗口和 `#` / `.` 行数组，不含本地视频路径。两个 `.osu` 的标准 `Source` 字段记录 `协议 结束时间 列数 SHA-256`。客户端通过当前谱面资源接口读取帧文件，校验配对关系及尺寸、时间、像素预算；数据缺失或不匹配会拒绝播放，要求重新导出。

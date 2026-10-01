@@ -1,10 +1,13 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.Loader;
 using System.Security.Cryptography;
 using System.Text;
 using osu.Game.Beatmaps;
+using osu.Game.Rulesets;
 using osu.Game.Rulesets.Mania;
 using osu.Game.Rulesets.Mania.Beatmaps;
 using osu.Game.Rulesets.Mania.Objects;
@@ -40,6 +43,29 @@ class ClientTests
     static void Check()
     {
         var pixelFilm = new PixelFilmRuleset();
+        // The pinned client's compatibility check uses no store state; avoid opening a user database.
+        var store = (RealmRulesetStore)RuntimeHelpers.GetUninitializedObject(typeof(RealmRulesetStore));
+        typeof(RealmRulesetStore).GetMethod("testRulesetCompatibility", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(store, new object[] { pixelFilm.RulesetInfo });
+        var empty = new Beatmap();
+        var emptyConverter = pixelFilm.CreateBeatmapConverter(empty);
+        Assert(!emptyConverter.CanConvert(), "Startup probe is not a playable film");
+        var probeBeatmap = (ManiaBeatmap)emptyConverter.Convert();
+        Assert(probeBeatmap.HitObjects.Count == 0 && probeBeatmap.Stages.Count == 1 && probeBeatmap.TotalColumns == 1,
+            "Startup probe produces a valid empty stage, not a completion marker");
+        empty.HitObjects.Add(new Note { StartTime = 1000, Column = 0 });
+        foreach (string invalidSource in new[] { "", "ordinary beatmap", "osu-paint-film-v1 broken" })
+        {
+            empty.Metadata.Source = invalidSource;
+            var invalidConverter = pixelFilm.CreateBeatmapConverter(empty);
+            Assert(!invalidConverter.CanConvert(), "Non-film maps remain unplayable");
+            try { invalidConverter.Convert(); throw new Exception("Non-film map converted as a startup probe"); }
+            catch (InvalidDataException) { }
+        }
+        empty.HitObjects.Clear();
+        try { pixelFilm.CreateBeatmapConverter(empty).Convert(); throw new Exception("Malformed empty film was accepted"); }
+        catch (InvalidDataException) { }
+        Console.WriteLine("PASS: target client startup compatibility, empty probe and invalid-map rejection.");
         Assert(pixelFilm.RulesetInfo.OnlineID == -1 && pixelFilm.ShortName != "mania", "Separate custom mode identity");
         foreach (int variant in pixelFilm.AllVariants) pixelFilm.GetDefaultKeyBindings(variant).ToArray();
         var criteria = new FilterCriteria { Ruleset = pixelFilm.RulesetInfo, AllowConvertedBeatmaps = true,
@@ -61,6 +87,7 @@ class ClientTests
             Assert(converter.CanConvert(), "Generated map accepted");
             var working = new FixtureWorkingBeatmap(Array.Empty<byte>(), beatmap);
             var converted = (ManiaBeatmap)working.GetPlayableBeatmap(pixelFilm.RulesetInfo);
+            Assert(converted.Metadata.Source == beatmap.Metadata.Source, "Film descriptor survives conversion");
             Assert(converted.Stages.Count == 1 && converted.TotalColumns == keys, $"Full {keys}K single stage");
             Assert(converted.HitObjects.Count == 1 && converted.HitObjects[0].StartTime == 3000, "Completion uses film end, not frozen note time");
             using var drawable = pixelFilm.CreateDrawableRulesetWith(converted);

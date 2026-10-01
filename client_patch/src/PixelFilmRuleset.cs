@@ -70,8 +70,11 @@ internal sealed class FilmBeatmapConverter : ManiaBeatmapConverter
 
     protected override Beatmap<ManiaHitObject> ConvertBeatmap(IBeatmap original, CancellationToken cancellationToken)
     {
-        if (!CanConvert()) throw new InvalidDataException("Re-export this map with osu-paint before using Pixel Film.");
         cancellationToken.ThrowIfCancellationRequested();
+        // RealmRulesetStore converts an empty probe at startup without checking CanConvert().
+        if (original.HitObjects.Count == 0 && string.IsNullOrEmpty(original.Metadata.Source))
+            return new ManiaBeatmap(new StageDefinition(1));
+        if (!CanConvert()) throw new InvalidDataException("Re-export this map with osu-paint before using Pixel Film.");
         FilmDescriptor.TryParse(original.Metadata.Source, out var film);
         var converted = CreateBeatmap();
         converted.BeatmapInfo = original.BeatmapInfo;
