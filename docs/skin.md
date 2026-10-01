@@ -1,6 +1,6 @@
 # Pixel Film：lazer 全屏皮肤
 
-核查日期：2026-10-01。应用和皮肤仅适配 osu!lazer。生成器可写 1–18K，皮肤包含全部 18 个配置；原版客户端的 >9K 限制见下文。
+核查日期：2026-10-01。应用和皮肤仅适配 osu!lazer。生成器可写 1–18K，皮肤包含全部 18 个配置；目标原版客户端的 >10K 限制见下文。可选 [Pixel Film 模式](client-patch.md) 直接显示完整帧，无需此皮肤。
 
 ## 安装
 
@@ -36,9 +36,9 @@ lazer 向下滚动的 [legacy 音符贴图](https://github.com/ppy/osu/blob/mast
 
 [LegacyManiaSkinConfiguration](https://github.com/ppy/osu/blob/master/osu.Game/Skinning/LegacyManiaSkinConfiguration.cs) 尚未实现 `SplitStages` / `StageSeparation`。这些字段无法强制 lazer 合并舞台，已从当前皮肤移除。
 
-[ManiaBeatmapConverter](https://github.com/ppy/osu/blob/master/osu.Game.Rulesets.Mania/Beatmaps/ManiaBeatmapConverter.cs) 对原生 mania 的 >9 列先整数除 2，再建立两个等列数舞台。因此 10/12/14/16/18K 强制拆分，11/13/15/17K 分别变为 10/12/14/16 列。皮肤不能恢复转换时丢掉的列。1–9K 可以采用整幅宽度配置；>9K 的完整无分割画面需要客户端扩展或上游修改。
+[ManiaBeatmapConverter](https://github.com/ppy/osu/blob/master/osu.Game.Rulesets.Mania/Beatmaps/ManiaBeatmapConverter.cs) 在已安装 `2026.921.0-lazer` 中对原生 mania 的 >10 列先整数除 2，再建立两个等列数舞台。12/14/16/18K 保留列数但拆分，11/13/15/17K 分别变为 10/12/14/16 列。皮肤不能恢复转换时丢掉的列。1–10K 可以采用整幅宽度配置；早期文档将边界写为 >9K，本次以目标程序集的执行结果更正。
 
-用户已确认暂不制作客户端扩展。当前交付包含 1–18K 导出和皮肤配置，不能视为原版 lazer 已完整实现无分割 1–18K。
+用户现已授权客户端配合。可装卸的 Pixel Film 规则集建立 1–18 列单舞台，直接显示完整黑白帧；普通 mania 仍有上述限制。安装、卸载与验证边界见 [客户端补丁文档](client-patch.md)。
 
 ## 构建与验证
 

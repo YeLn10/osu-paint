@@ -288,7 +288,7 @@ class ExportTests(unittest.TestCase):
             output = Path(directory)
             write_output(plan, output, audio_data=audio)
             with zipfile.ZipFile(output / "pattern.osz") as archive:
-                self.assertEqual(set(archive.namelist()), {"pattern.osu", "audio.ogg"})
+                self.assertEqual(set(archive.namelist()), {"pattern.osu", "pixel-film.osu", "audio.ogg", "pixel-film.json"})
                 self.assertEqual(archive.read("audio.ogg"), audio)
                 self.assertIn("AudioFilename: audio.ogg", archive.read("pattern.osu").decode())
             self.assertFalse((output / "silence.wav").exists())
@@ -324,7 +324,7 @@ class ExportTests(unittest.TestCase):
             write_output(plan, output)
             with zipfile.ZipFile(output / "pattern.osz") as archive:
                 self.assertIsNone(archive.testzip())
-                self.assertEqual(set(archive.namelist()), {"pattern.osu", "silence.wav"})
+                self.assertEqual(set(archive.namelist()), {"pattern.osu", "pixel-film.osu", "silence.wav", "pixel-film.json"})
                 self.assertEqual(archive.read("pattern.osu").decode().splitlines(),
                                  encode_osu(plan).splitlines())
             with wave.open(str(output / "silence.wav")) as audio:

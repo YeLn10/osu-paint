@@ -6,6 +6,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from fractions import Fraction
 import html
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -290,18 +291,41 @@ def number(value):
     return f"{value:.9f}".rstrip("0").rstrip(".")
 
 
-def encode_osu(plan, audio_filename="silence.wav"):
+def encode_client_film(plan):
+    frames = []
+    for index, frame in enumerate(plan["frames"]):
+        end = frame["end_ms"]
+        if index + 1 < len(plan["frames"]):
+            next_start = plan["frames"][index + 1]["start_ms"]
+            if next_start - end <= 2 * plan["transition_ms"] + 1e-7:
+                end = next_start
+        frames.append(dict(start_ms=frame["start_ms"], end_ms=end, rows=frame["pattern"]))
+    return json.dumps(dict(format="osu-paint-film-v1", width=plan["keys"], height=len(plan["pattern"]),
+                           start_ms=plan["start_ms"], end_ms=plan["end_ms"], frames=frames),
+                      separators=(",", ":")).encode("utf-8")
+
+
+def encode_osu(plan, audio_filename="silence.wav", *, film_hash=None, film_entry=False):
+    film_hash = film_hash or hashlib.sha256(encode_client_film(plan)).hexdigest()
     lines = [
         "osu file format v14", "", "[General]", f"AudioFilename: {audio_filename}",
         "AudioLeadIn: 0", f"PreviewTime: {int(plan['start_ms'])}", "Countdown: 0",
-        "SampleSet: Soft", "Mode: 3", "", "[Metadata]", "Title: SV Pattern",
+        "SampleSet: Soft", f"Mode: {0 if film_entry else 3}", "", "[Metadata]", "Title: SV Pattern",
         "Artist: osu-paint", "Creator: osu-paint",
-        f"Version: lazer {plan['keys']}K - Scroll speed {number(plan['scroll_speed'])} - Use NF",
-        "Tags: sv animation prototype", "BeatmapID: 0", "BeatmapSetID: -1", "",
-        "[Difficulty]", "HPDrainRate: 0", f"CircleSize: {plan['keys']}",
+        (f"Version: Pixel Film {plan['keys']} columns" if film_entry else
+         f"Version: lazer {plan['keys']}K - Scroll speed {number(plan['scroll_speed'])} - Use NF"),
+        f"Source: osu-paint-film-v1 {number(plan['end_ms'])} {plan['keys']} {film_hash}",
+        "Tags: sv animation prototype osu-paint-film-v1", "BeatmapID: 0", "BeatmapSetID: -1", "",
+        "[Difficulty]", "HPDrainRate: 0", f"CircleSize: {5 if film_entry else plan['keys']}",
         "OverallDifficulty: 5", "ApproachRate: 5", "SliderMultiplier: 1",
         "SliderTickRate: 1", "", "[Events]", "", "[TimingPoints]",
     ]
+    if film_entry:
+        # Native mania maps are hidden in custom modes. A standard entry map
+        # makes Pixel Film selectable without changing the original difficulty.
+        lines.extend(["0,500,4,2,0,5,1,0", "", "[HitObjects]",
+                      f"256,192,{number(plan['end_ms'])},1,0,0:0:0:0:"])
+        return "\n".join(lines) + "\n"
     for p in plan["points"]:
         # Red lines reset inherited speed; ALWAYS follow with the intended green line.
         lines.append(f"{number(p['time'])},{number(p['beat_length'])},4,2,0,5,1,8")
@@ -365,7 +389,11 @@ def write_output(plan, output, *, audio_data=None):
     output.mkdir(parents=True, exist_ok=True)
     build_skins(output, len(plan["pattern"]))
     audio_filename = "silence.wav" if audio_data is None else "audio.ogg"
-    (output / "pattern.osu").write_text(encode_osu(plan, audio_filename), encoding="utf-8")
+    film = encode_client_film(plan)
+    film_hash = hashlib.sha256(film).hexdigest()
+    (output / "pixel-film.json").write_bytes(film)
+    (output / "pattern.osu").write_text(encode_osu(plan, audio_filename, film_hash=film_hash), encoding="utf-8")
+    (output / "pixel-film.osu").write_text(encode_osu(plan, audio_filename, film_hash=film_hash, film_entry=True), encoding="utf-8")
     if audio_data is not None:
         (output / audio_filename).write_bytes(audio_data)
     else:
@@ -377,7 +405,7 @@ def write_output(plan, output, *, audio_data=None):
                 audio.writeframes(b"\x80" * size)
                 remaining -= size
     with zipfile.ZipFile(output / "pattern.osz", "w", zipfile.ZIP_DEFLATED) as archive:
-        for name in ("pattern.osu", audio_filename):
+        for name in ("pattern.osu", "pixel-film.osu", audio_filename, "pixel-film.json"):
             archive.write(output / name, name)
     (output / "report.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
     (output / "preview.html").write_text(make_preview(plan), encoding="utf-8")
@@ -388,10 +416,11 @@ def write_output(plan, output, *, audio_data=None):
             "osu!lazer 播放设置\n"
             f"屏幕刷新率：{number(video['refresh_hz'])} Hz\n"
             "已自动安排换帧；音轨不移动。\n"
-            f"使用固定滚速 {number(plan['scroll_speed'])}、向下滚动与 NF；不要使用变速或改变列数的 Mod。\n"
+            "安装可选补丁后选择 Pixel Film 模式，完整帧直接切换，无需皮肤或 NF。\n"
+            f"原版 mania 使用固定滚速 {number(plan['scroll_speed'])}、向下滚动与 NF；不要使用变速或改变列数的 Mod。\n"
             "游戏与系统使用填写的刷新率，舞台缩放保持默认值。\n"
-            "导入同目录中匹配屏幕比例的 pixel-film*.osk。\n"
-            "原版 lazer 的 >9K 仍拆分，11/13/15/17K 会少一列；暂不提供客户端扩展。\n",
+            "原版 mania 导入同目录中匹配屏幕比例的 pixel-film*.osk。\n"
+            "原版 lazer 的 >10K 仍拆分，11/13/15/17K 会少一列；Pixel Film 保留 1–18 列。\n",
             encoding="utf-8")
     elif settings_path.exists():
         settings_path.unlink()

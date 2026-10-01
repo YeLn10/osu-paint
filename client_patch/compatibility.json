@@ -1,0 +1,9 @@
+{
+  "game_version": "2026.921.0-lazer",
+  "ruleset_api": "2026.818.0",
+  "assemblies": {
+    "osu.Game.dll": "f4903a29cb81619027c093cf2b9068d6c0a578654885c864451f799f694939b2",
+    "osu.Game.Rulesets.Mania.dll": "eb891e48548baaf1a54710fc4bb6f0e5e05a4f92a036f2c0277639b5d2933073",
+    "osu.Framework.dll": "234c4278eb6a377f5cb1bc48e9ba12e8c639891c000b77e0c320947acf7a2e8e"
+  }
+}

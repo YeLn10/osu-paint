@@ -132,7 +132,7 @@ class VideoImportTests(unittest.TestCase):
                                  creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         self.assertEqual(process.returncode, 0, process.stderr.decode(errors="replace"))
         with zipfile.ZipFile(output / "pattern.osz") as archive:
-            self.assertEqual(set(archive.namelist()), {"pattern.osu", "audio.ogg"})
+            self.assertEqual(set(archive.namelist()), {"pattern.osu", "pixel-film.osu", "audio.ogg", "pixel-film.json"})
             exported = archive.read("pattern.osu").decode("utf-8")
             self.assertIn("CircleSize: 16", exported)
             notes = exported.split("[HitObjects]", 1)[1].strip().splitlines()
@@ -168,7 +168,7 @@ class VideoImportTests(unittest.TestCase):
         output = self.directory / "export"
         write_output(result["plan"], output, audio_data=result["audio"])
         with zipfile.ZipFile(output / "pattern.osz") as archive:
-            self.assertEqual(set(archive.namelist()), {"pattern.osu", "audio.ogg"})
+            self.assertEqual(set(archive.namelist()), {"pattern.osu", "pixel-film.osu", "audio.ogg", "pixel-film.json"})
             self.assertTrue(archive.read("audio.ogg").startswith(b"OggS"))
             self.assertIn(b"AudioFilename: audio.ogg", archive.read("pattern.osu"))
         pcm = self.ffmpeg(["-i", str(output / "audio.ogg"), "-ac", "1", "-ar", "48000", "-f", "f32le", "pipe:1"])
