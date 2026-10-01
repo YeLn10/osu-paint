@@ -30,7 +30,8 @@ def resolve_video_options(*, fps, width, height, start_ms, scroll_speed,
     if refresh_hz is not None:
         if isinstance(refresh_hz, bool) or not math.isfinite(refresh_hz) or not 20 <= refresh_hz <= 1000:
             raise ValueError("实际刷新率须为 20–1000 Hz，可填写小数。")
-        divisor = max(math.ceil(refresh_hz / 60), 1, round(refresh_hz / fps))
+        # Never add extra sweeps by rounding FPS up; tolerate a resolved float round-trip.
+        divisor = max(math.ceil(refresh_hz / 60), 1, math.ceil(refresh_hz / fps - 1e-12))
         fps = refresh_hz / divisor
         if minimum_transition_ms(scroll_speed) >= 1000 / refresh_hz:
             raise ValueError("切帧无法放入一个刷新周期；请提高滚速或降低目标刷新率。")
@@ -208,10 +209,15 @@ def import_video(path, *, fps=10, width=10, height=24, start_ms=2000, scroll_spe
             windows = [(starts[i], starts[i + 1] - (transition if i < count - 1 else 0))
                        for i in range(count)]
         else:
-            refresh_period = Fraction(1000) / Fraction(str(refresh_hz))
-            post_margin = (refresh_period - Fraction(str(transition))) / 2
-            starts = [float(origin)] + [float(origin + i * period_exact - post_margin)
-                                          for i in range(1, count)]
+            refresh_period = float(Fraction(1000) / Fraction(str(refresh_hz)))
+            guard = min(transition / 2, (refresh_period - transition) / 4)
+            margin_span = refresh_period - transition - 2 * guard
+            phase_step = (math.sqrt(5) - 1) / 2
+            # Spread sweeps across the inter-refresh gap instead of phase-locking
+            # every cut to one unknown display phase. Keep nominal ticks protected.
+            starts = [float(origin)] + [float(origin + i * period_exact) - guard
+                                       - margin_span * ((i * phase_step) % 1)
+                                       for i in range(1, count)]
             windows = [(starts[i], starts[i + 1] - transition) for i in range(count - 1)]
             windows.append((starts[-1], float(origin + count * period_exact)))
         report("正在编译谱面与视频时间轴…")

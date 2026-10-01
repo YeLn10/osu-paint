@@ -96,8 +96,58 @@ class RefreshClockTests(unittest.TestCase):
                     for before, after in zip(frames, frames[1:]):
                         middle = (before["end_ms"] + after["start_ms"]) / 2
                         refresh_index = math.floor((middle - start) / (1000 / hz))
-                        self.assertAlmostEqual(middle, start + (refresh_index + .5) * 1000 / hz,
-                                               delta=1e-6)
+                        self.assertGreater(before["end_ms"], start + refresh_index * 1000 / hz)
+                        self.assertLess(after["start_ms"], start + (refresh_index + 1) * 1000 / hz)
+                        self.assertAlmostEqual(after["start_ms"] - before["end_ms"], plan["transition_ms"])
+
+    def test_unknown_refresh_phase_does_not_catch_every_video_transition(self):
+        # Constant black area, alternating columns: any sweep is an unwanted exposure.
+        for hz in (60, 120, 165, 60000 / 1001):
+            with self.subTest(hz=hz):
+                plan = synthetic_video(count=241, refresh_hz=hz)["plan"]
+                period = 1000 / hz
+                divisor = round(hz / plan["video"]["fps"])
+                worst = longest = 0
+                for phase in range(200):
+                    caught = run = 0
+                    for index in range(1, len(plan["frames"])):
+                        now = plan["start_ms"] + (index * divisor - 1 + phase / 200) * period
+                        before, after = plan["frames"][index - 1:index + 1]
+                        hit = before["end_ms"] < now < after["start_ms"]
+                        caught += hit
+                        run = run + 1 if hit else 0
+                        longest = max(longest, run)
+                    worst = max(worst, caught)
+                self.assertLessEqual(worst / 240, .25, (hz, worst))
+                self.assertLessEqual(longest, 2, (hz, longest))
+
+    def test_serialized_constant_area_video_does_not_flash_on_every_cut(self):
+        from test_osu_paint import decode, position
+        for hz in (60, 120, 165):
+            with self.subTest(hz=hz):
+                plan = synthetic_video(count=121, refresh_hz=hz)["plan"]
+                points, notes = decode(encode_osu(plan))
+                heads = [position(points, time, plan["time_range_ms"]) for _, time in notes]
+                divisor = round(hz / plan["video"]["fps"])
+                flash_samples = 0
+                for index in range(1, 121):
+                    # The old fixed half-cycle alignment repeatedly exposes a 10% blank band here.
+                    now = plan["start_ms"] + (index * divisor - .5) * 1000 / hz
+                    current = position(points, now, plan["time_range_ms"])
+                    bottoms = [1 - head + current for head in heads]
+                    black_area = sum(max(0, min(1, bottom) - max(0, bottom - 1 / 3))
+                                     for bottom in bottoms) / 2
+                    flash_samples += black_area < .48
+                self.assertLessEqual(flash_samples, 30, (hz, flash_samples))
+
+    def test_refresh_alignment_never_increases_requested_frame_rate(self):
+        for hz in (60, 120, 165, 144, 60000 / 1001):
+            for fps in (20, 24, 30, 50, 60):
+                with self.subTest(hz=hz, fps=fps):
+                    options = resolve_video_options(fps=fps, width=2, height=3, start_ms=2000,
+                                                    scroll_speed=27, refresh_hz=hz)
+                    self.assertLessEqual(options["fps"], fps + 1e-9)
+                    self.assertAlmostEqual(resolve_video_options(**options)["fps"], options["fps"])
 
     def test_an_unknown_presentation_phase_can_still_sample_a_real_transition(self):
         # A reproducible counterexample to a zero-ghosting guarantee based only on Hz/start.
