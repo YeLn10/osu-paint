@@ -829,7 +829,8 @@ class PaintApp:
             self.plan = None
             self._status(str(error), error=True)
         if self.plan is not None:
-            self.timeline = Timeline([Point(**point) for point in self.plan["points"]])
+            self.timeline = Timeline([Point(**point) for point in self.plan["points"]],
+                                     self.plan["base_beat_length_ms"])
             self.note_distances = [self.timeline.position(note["time_ms"]) for note in self.plan["notes"]]
             self.note_end_distances = [self.timeline.position(note.get("end_time_ms", note["time_ms"]))
                                        for note in self.plan["notes"]]
@@ -840,7 +841,7 @@ class PaintApp:
             self.seek.configure(from_=self.seek_min, to=self.seek_max)
             self.seek_time.set(self.plan["frames"][self.selected]["start_ms"])
             self._status(f"{self.plan['keys']}K · {len(self.frames)} 帧 · {len(self.plan['notes'])} 音符 · "
-                         f"{'极速' if self.fast_clear.get() else ''}切帧 {self.plan['transition_ms']:.3f} ms · "
+                         f"{'极速' if self.fast_clear.get() else ''}切帧 {self.plan['sweep_ms']:.3f} ms · "
                          f"单帧最大预计漂移 {self.plan['drift_at_768px']:.4f} px / 768 px"
                          + (" · 已带视频音轨" if self.audio_data is not None else ""))
         state = "normal" if self.plan is not None else "disabled"

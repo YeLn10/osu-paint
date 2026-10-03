@@ -37,7 +37,7 @@ class FullScreenTests(unittest.TestCase):
                         self.assertTrue(all(1 - head + current <= 1e-6 for _, head, _ in rectangles))
                         areas = []
                         for step in range(101):
-                            now = first["end_ms"] + (second["start_ms"] - first["end_ms"]) * step / 100
+                            now = first["sweep_start_ms"] + (second["start_ms"] - first["sweep_start_ms"]) * step / 100
                             current = position(points, now, plan["time_range_ms"])
                             area = 0
                             for _, head, tail in rectangles:
@@ -57,7 +57,19 @@ class FullScreenTests(unittest.TestCase):
         plan = compile_frames([["#."] * 3, [".#"] * 3], frame_times=windows, fast_clear=True)
         self.assertEqual([(frame["start_ms"], frame["end_ms"]) for frame in plan["frames"]], windows)
         self.assertEqual(plan["frames"][0]["exit_end_ms"], windows[1][0])
-        self.assertEqual(plan["frames"][1]["entry_start_ms"], windows[0][1])
+        self.assertGreaterEqual(plan["frames"][1]["entry_start_ms"], windows[0][1])
+
+    def test_saved_video_windows_use_a_short_sweep_without_moving_frames(self):
+        windows = [(2000, 2050 - .671), (2050, 2100)]
+        plan = compile_frames([["#."] * 3, [".#"] * 3], frame_times=windows, fast_clear=True)
+        first, second = plan["frames"]
+        self.assertEqual([(f["start_ms"], f["end_ms"]) for f in plan["frames"]], windows)
+        self.assertLess(second["entry_start_ms"], second["start_ms"])
+        self.assertGreater(first["sweep_start_ms"], first["end_ms"])
+        self.assertAlmostEqual(second["entry_start_ms"], first["sweep_start_ms"])
+        self.assertLess(second["start_ms"] - second["entry_start_ms"], .08)
+        self.assertTrue(all(n["time_ms"] > plan["frames"][n["frame"]]["sweep_start_ms"]
+                            for n in plan["notes"]))
 
     def test_native_bottom_anchors_fill_rows_and_stay_unjudged_during_display(self):
         for height in (1, 3, 24, 128):

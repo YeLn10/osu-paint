@@ -113,13 +113,30 @@ class RefreshClockTests(unittest.TestCase):
                     for index in range(1, len(plan["frames"])):
                         now = plan["start_ms"] + (index * divisor - 1 + phase / 200) * period
                         before, after = plan["frames"][index - 1:index + 1]
-                        hit = before["end_ms"] < now < after["start_ms"]
+                        hit = before["sweep_start_ms"] < now < after["start_ms"]
                         caught += hit
                         run = run + 1 if hit else 0
                         longest = max(longest, run)
                     worst = max(worst, caught)
                 self.assertLessEqual(worst / 240, .25, (hz, worst))
                 self.assertLessEqual(longest, 2, (hz, longest))
+
+    def test_fast_sweeps_reduce_exposure_instead_of_only_redistributing_it(self):
+        for hz in (60, 120, 165, 60000 / 1001):
+            with self.subTest(hz=hz):
+                plan = synthetic_video(count=241, refresh_hz=hz)["plan"]
+                period = 1000 / hz
+                counts = []
+                for phase in range(200):
+                    caught = 0
+                    for before, after in zip(plan["frames"], plan["frames"][1:]):
+                        low = (before["sweep_start_ms"] - plan["start_ms"]) / period - phase / 200
+                        high = (after["start_ms"] - plan["start_ms"]) / period - phase / 200
+                        caught += math.floor(low + 1e-9) + 1 < high - 1e-9
+                    counts.append(caught)
+                self.assertLessEqual(max(counts), 5, (hz, max(counts)))
+                self.assertLess(sum(counts) / len(counts), 3, hz)
+                self.assertLessEqual(plan["drift_at_768px"], .5)
 
     def test_serialized_constant_area_video_does_not_flash_on_every_cut(self):
         from test_osu_paint import decode, position
@@ -156,7 +173,7 @@ class RefreshClockTests(unittest.TestCase):
             plan = synthetic_video(count=6, refresh_hz=hz)["plan"]
             points, _ = decode(encode_osu(plan))
             before, after = plan["frames"][:2]
-            now = (before["end_ms"] + after["start_ms"]) / 2
+            now = (before["sweep_start_ms"] + after["start_ms"]) / 2
             phase = (now - plan["start_ms"]) % (1000 / hz)
             self.assertGreater(phase, 0)
             self.assertLess(phase, 1000 / hz)
@@ -228,7 +245,7 @@ class RefreshClockTests(unittest.TestCase):
                         sv = min(10, max(0.01, -100 / value))
                     if points and points[-1][0] == time:
                         points.pop()
-                    points.append((time, 500 / beat * sv / plan["time_range_ms"]))
+                    points.append((time, float(timing[0].split(",")[1]) / beat * sv / plan["time_range_ms"]))
                 times = [p[0] for p in points]
                 distances = [0.0]
                 for i in range(1, len(points)):
@@ -241,6 +258,7 @@ class RefreshClockTests(unittest.TestCase):
                     i = max(0, bisect_right(times, time) - 1)
                     return distances[i] + (time - times[i]) * points[i][1]
 
+                model = Timeline([Point(**p) for p in plan["points"]], plan["base_beat_length_ms"])
                 objects = [line.split(",") for line in text.split("[HitObjects]\n")[1].splitlines()]
                 heads = [position(float(n[2])) for n in objects]
                 tails = [position(float(n[5].split(":")[0])) if n[3] == "128" else head
@@ -255,7 +273,8 @@ class RefreshClockTests(unittest.TestCase):
                                if heads[i] <= current + 1 and tails[i] >= current]
                     self.assertEqual(len(visible), 1 if merged else 3, (client, tick))
                     self.assertEqual({int(int(objects[i][0]) * 2 / 512) for i in visible}, {tick // 3 % 2})
-                    inset = 1 / 768 + plan["frames"][tick // 3]["drift_playfield_fraction"]
+                    frame = plan["frames"][tick // 3]
+                    inset = 1 / 768 + (model.position(frame["sweep_start_ms"]) - model.position(now)) / plan["time_range_ms"]
                     expected = [1 - inset] if merged else [1 / 3 - inset, 2 / 3 - inset, 1 - inset]
                     for y, wanted in zip(sorted(1 - (heads[i] - current) for i in visible), expected):
                         self.assertAlmostEqual(y, wanted, delta=1e-4)
@@ -273,7 +292,7 @@ class RefreshExportTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("node"), "Node.js unavailable; HTML geometry check skipped")
     def test_html_preview_draws_hold_body_until_its_tail_leaves(self):
         plan = compile_frames([["#"] * 4], 2000, 2100, fast_clear=True, merge_holds=True)
-        timeline = Timeline([Point(**p) for p in plan["points"]])
+        timeline = Timeline([Point(**p) for p in plan["points"]], plan["base_beat_length_ms"])
         target = timeline.position(plan["notes"][0]["time_ms"]) + 0.3 * plan["time_range_ms"]
         samples = [plan["start_ms"], timeline.time_at(target), plan["end_ms"] + plan["transition_ms"] + 1]
         script = make_preview(plan).split("<script>")[1].split("</script>")[0]

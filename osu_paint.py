@@ -99,7 +99,8 @@ def minimum_transition_ms(scroll_speed=SCROLL_SPEED):
     if not math.isfinite(scroll_speed) or not 1 <= scroll_speed <= 40:
         raise ValueError("lazer 滚速须在 1–40 之间。")
     time_range = 11485 / scroll_speed * 480 / 402
-    # Lazer's maximum legal speed is 500 / 6 * 10. Round UP to avoid exceeding it.
+    # Reserve a legal sweep at the conservative 500 ms reference; fast-clear may
+    # shorten the actual sweep after checking the complete picture's drift budget.
     minimum = math.ceil(SWEEP_HEIGHT * time_range / (500 / 6 * 10) * 1000) / 1000
     return minimum
 
@@ -192,19 +193,38 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
               for (start, end), anchor in zip(frame_times, anchors)]
     if 60000 - (sum(counts) - 1) * 0.01 < 6:
         raise ValueError("展示时间过长，无法分配不同的合法慢速 BPM。")
-    points = [Point(0, 500, 1), Point(start_ms - transition_ms, fast_beat, 10)]
+    reference_beat = 500
+    if fast_clear:
+        # A longer reference beat permits faster sweeps, but also increases slow
+        # drift. Keep the existing picture groups and cap their WHOLE held span
+        # (including the extended plateau before a shared sweep) at half a pixel.
+        limit = 5000
+        for i, first in enumerate(note_frames):
+            if i + 1 < len(frames) and note_frames[i + 1] == first:
+                continue
+            until = frame_times[i][1]
+            if i + 1 < len(frames) and frame_times[i + 1][0] - until <= 2 * transition_ms + 1e-7:
+                until = frame_times[i + 1][0]
+            anchored = anchors[first]
+            slow_time = until - frame_times[first][0] - anchored
+            if slow_time > 0:
+                limit = min(limit, (reuse_distance - anchored * .01) * slow_beat / (slow_time * .01))
+        # Match lazer's millisecond beat grouping, with a little rounding margin.
+        reference_beat = max(500, math.floor(limit * .98 * 1000) / 1000)
+    sweep_ms = transition_ms * 500 / reference_beat
+    points = [Point(0, reference_beat, 1), Point(start_ms - sweep_ms, fast_beat, 10)]
     frame_plans = []
     slow_index = 0
-    entry_start = start_ms - transition_ms
+    entry_start = start_ms - sweep_ms
 
     for index, (rows, (start, end), count) in enumerate(zip(frames, frame_times, counts)):
         frame = {"pattern": rows, "start_ms": start, "end_ms": end,
-                 "entry_start_ms": entry_start, "exit_end_ms": end + transition_ms, "sweep_start_ms": end}
+                 "entry_start_ms": entry_start, "exit_end_ms": end + sweep_ms, "sweep_start_ms": end}
         frame_plans.append(frame)
         if anchors[index]:
-            # Brief near-stationary 500 ms segments keep the reference BPM dominant
+            # Brief near-stationary reference segments keep that BPM dominant
             # even when thousands of video transitions would otherwise outweigh the lead-in.
-            points.append(Point(start, 500, 0.01))
+            points.append(Point(start, reference_beat, 0.01))
         for i in range(count):
             # Keep values unique across ALL frames, not just within one hold.
             beat = 60000 - slow_index * 0.01
@@ -221,16 +241,18 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
             if gap > 2 * transition_ms + 1e-7:
                 # Clear the old frame now, then bring the next in at its own start.
                 points.append(Point(end, fast_beat, 10))
-                points.extend([Point(end + transition_ms, 500, 1),
-                               Point(next_start - transition_ms, fast_beat, 10)])
-                entry_start = next_start - transition_ms
+                points.extend([Point(end + sweep_ms, reference_beat, 1),
+                               Point(next_start - sweep_ms, fast_beat, 10)])
+                entry_start = next_start - sweep_ms
             else:
-                # Close neighbours share one sweep, as in the original equal-time mode.
-                points.append(Point(end, fast_beat, min(10, 10 * transition_ms / gap)))
+                # Hold the old picture longer; compress the sweep, not the saved
+                # frame windows. Old video projects benefit on re-export too.
+                entry_start = next_start - gap * 500 / reference_beat
+                frame["sweep_start_ms"] = entry_start
+                points.append(Point(entry_start, fast_beat, min(10, 10 * transition_ms / gap)))
                 frame["exit_end_ms"] = next_start
-                entry_start = end
-    points.append(Point(end_ms + transition_ms, 500, 1))
-    timeline = Timeline(points)
+    points.append(Point(end_ms + sweep_ms, reference_beat, 1))
+    timeline = Timeline(points, reference_beat)
 
     for index in range(len(frame_plans) - 2, -1, -1):
         if note_frames[index] == note_frames[index + 1]:
@@ -270,7 +292,7 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
     notes.sort(key=lambda n: (n["time_ms"], n["column"]))
     last_object_time = max(n.get("end_time_ms", n["time_ms"]) for n in notes)
     base = most_common_beat_length(points, last_object_time)
-    if not math.isclose(base, 500, abs_tol=1e-9):
+    if not math.isclose(base, reference_beat, abs_tol=1e-9):
         raise ValueError("该时间组合改变了参考 BPM；请增加 start 或缩短 transition。")
 
     drift = max(frame["drift_playfield_fraction"] for frame in frame_plans)
@@ -278,7 +300,7 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
         "pattern": frames[0], "frames": frame_plans, "keys": len(frames[0][0]),
         "screen_aspect_ratio": DEFAULT_ASPECT_RATIO,
         "start_ms": start_ms, "end_ms": end_ms,
-        "transition_ms": transition_ms, "scroll_speed": scroll_speed,
+        "transition_ms": transition_ms, "sweep_ms": sweep_ms, "scroll_speed": scroll_speed,
         "requested_transition_ms": requested_transition, "fast_clear": fast_clear,
         "timing_mode": timing_mode, "target_client": "lazer", "merge_holds": merge_holds,
         "time_range_ms": time_range, "base_beat_length_ms": base,

@@ -43,7 +43,7 @@ def position(points, time, time_range):
         if start >= time:
             break
         end = points[i + 1][0] if i + 1 < len(points) else math.inf
-        value = (min(end, time) - start) * 500 / beat * sv / time_range
+        value = (min(end, time) - start) * points[0][1] / beat * sv / time_range
         total += struct.unpack("f", struct.pack("f", value))[0] if end <= time else value
     return total
 
@@ -113,7 +113,7 @@ class ExportTests(unittest.TestCase):
                 plan = compile_frames([["#", ".", "#"]] * 120, scroll_speed=speed,
                                       frame_times=windows, fast_clear=True)
                 points, _ = decode(encode_osu(plan))
-                self.assertEqual(plan["base_beat_length_ms"], 500)
+                self.assertEqual(plan["base_beat_length_ms"], points[0][1])
                 self.assertTrue(all(a["time"] < b["time"] for a, b in zip(plan["points"], plan["points"][1:])))
                 for note in plan["notes"]:
                     now = plan["frames"][note["frame"]]["exit_end_ms"]
@@ -268,6 +268,39 @@ class ExportTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "至少"):
             compile_frames([[".."]], 2000, 3000, allow_empty_frames=True)
 
+    def test_fast_clear_limits_reference_speed_using_the_whole_reused_picture(self):
+        references = []
+        transition = minimum_transition_ms(27)
+        for repeated in (1, 60):
+            for merged in (False, True):
+                with self.subTest(repeated=repeated, holds=merged):
+                    frames = [["#."] * 3] * repeated + [[".#"] * 3]
+                    windows = [(2000 + i * 50, 2000 + (i + 1) * 50 - transition)
+                               for i in range(len(frames))]
+                    plan = compile_frames(frames, frame_times=windows, fast_clear=True,
+                                          anchor_reference=True, merge_holds=merged)
+                    self.assertEqual({f["note_frame"] for f in plan["frames"]}, {0, repeated})
+                    self.assertGreater(plan["base_beat_length_ms"], 500)
+                    self.assertLessEqual(plan["base_beat_length_ms"], 5000)
+                    references.append(plan["base_beat_length_ms"])
+                    points, notes = decode(encode_osu(plan))
+                    last = max(n.get("end_time_ms", n["time_ms"]) for n in plan["notes"])
+                    durations = {}
+                    for i, (start, beat, _) in enumerate(points):
+                        if start >= last:
+                            break
+                        end = min(points[i + 1][0], last)
+                        group = round(beat * 1000) / 1000
+                        durations[group] = durations.get(group, 0) + end - start
+                    self.assertEqual(max(durations, key=durations.get), plan["base_beat_length_ms"])
+                    for frame in (plan["frames"][0], plan["frames"][-1]):
+                        drift = (position(points, frame["sweep_start_ms"], plan["time_range_ms"])
+                                 - position(points, frame["start_ms"], plan["time_range_ms"])) * 768
+                        self.assertLessEqual(drift, .5001)
+                    for (_, time), note in zip(notes, plan["notes"]):
+                        self.assertGreater(time, plan["frames"][note["frame"]]["sweep_start_ms"])
+        self.assertLess(references[-1], references[0])
+
     def test_long_video_keeps_reference_bpm_at_60_fps(self):
         count = 12000
         period = 1000 / 60
@@ -276,7 +309,7 @@ class ExportTests(unittest.TestCase):
                    for i in range(count)]
         plan = compile_frames([["#"]] * count, frame_times=windows, fast_clear=True,
                               allow_empty_frames=True, anchor_reference=True)
-        self.assertEqual(plan["base_beat_length_ms"], 500)
+        self.assertGreaterEqual(plan["base_beat_length_ms"], 500)
         self.assertLess(len(plan["notes"]), count // 10)
         self.assertLessEqual(plan["drift_at_768px"], 0.5)
         self.assertEqual(len(plan["frames"]), count)
