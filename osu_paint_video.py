@@ -212,11 +212,12 @@ def import_video(path, *, fps=10, width=10, height=24, start_ms=2000, scroll_spe
             refresh_period = float(Fraction(1000) / Fraction(str(refresh_hz)))
             guard = min(transition / 2, (refresh_period - transition) / 4)
             margin_span = refresh_period - transition - 2 * guard
-            phase_step = (math.sqrt(5) - 1) / 2
-            # Spread sweeps across the inter-refresh gap instead of phase-locking
-            # every cut to one unknown display phase. Keep nominal ticks protected.
+            # Move across the protected gap in 64 cuts, then reflect instead of
+            # wrapping. Large per-cut phase jumps cause alternating short/long
+            # displayed frames even when the actual sweep is very brief.
+            phase_step = 1 / 64
             starts = [float(origin)] + [float(origin + i * period_exact) - guard
-                                       - margin_span * ((i * phase_step) % 1)
+                                       - margin_span * (1 - abs(1 - (i * phase_step) % 2))
                                        for i in range(1, count)]
             windows = [(starts[i], starts[i + 1] - transition) for i in range(count - 1)]
             windows.append((starts[-1], float(origin + count * period_exact)))

@@ -18,7 +18,7 @@ from osu_paint import Point, Timeline, compile_frames, encode_osu, main, make_pr
 from osu_paint_video import import_video, resolve_video_options
 
 
-def synthetic_video(count=2400, **options):
+def synthetic_video(count=2400, fps=20, **options):
     """Exercise the importer without spending two minutes encoding a fixture."""
     def decode(arguments, cancel):
         pixels = bytearray()
@@ -31,7 +31,7 @@ def synthetic_video(count=2400, **options):
         source = Path(directory) / "synthetic.mp4"
         source.touch()
         with patch("osu_paint_video._run_ffmpeg", side_effect=decode):
-            return import_video(source, fps=20, width=2, height=3, **options)
+            return import_video(source, fps=fps, width=2, height=3, **options)
 
 
 class HoldNoteTests(unittest.TestCase):
@@ -99,6 +99,29 @@ class RefreshClockTests(unittest.TestCase):
                         self.assertGreater(before["end_ms"], start + refresh_index * 1000 / hz)
                         self.assertLess(after["start_ms"], start + (refresh_index + 1) * 1000 / hz)
                         self.assertAlmostEqual(after["start_ms"] - before["end_ms"], plan["transition_ms"])
+
+    def test_refresh_phase_motion_preserves_even_picture_cadence(self):
+        for hz in (60, 120, 165, 60000 / 1001):
+            for fps in (10, 20, 30, 60):
+                with self.subTest(hz=hz, fps=fps):
+                    plan = synthetic_video(count=241, fps=fps, refresh_hz=hz, start_ms=2000.6)["plan"]
+                    starts = [frame["start_ms"] for frame in plan["frames"]]
+                    period = 1000 / hz
+                    divisor = round(hz / plan["video"]["fps"])
+                    expected = divisor * period
+                    # The first picture remains anchored to the audio start. From
+                    # the second picture on, offsets must move without wrap jumps.
+                    intervals = [b - a for a, b in zip(starts[1:], starts[2:])]
+                    self.assertLess(max(abs(gap - expected) for gap in intervals), .3)
+                    self.assertLess(abs(starts[1] - starts[0] - expected), 1)
+                    self.assertEqual(starts[0], 2000.6)
+                    self.assertAlmostEqual(plan["end_ms"], 2000.6 + len(starts) * expected)
+                    for phase in range(200):
+                        ticks = [math.ceil((s - starts[0]) / period - phase / 200 - 1e-9)
+                                 for s in starts[1:]]
+                        held = [b - a for a, b in zip(ticks, ticks[1:])]
+                        self.assertTrue(all(divisor - 1 <= n <= divisor + 1 for n in held))
+                        self.assertLessEqual(sum(n != divisor for n in held), 6, (hz, fps, phase))
 
     def test_unknown_refresh_phase_does_not_catch_every_video_transition(self):
         # Constant black area, alternating columns: any sweep is an unwanted exposure.
