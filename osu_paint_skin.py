@@ -61,7 +61,8 @@ def build_skin(path, *, rows=24, aspect_ratio=DEFAULT_ASPECT_RATIO, label="16:10
     files = {
         "skin.ini": skin_ini(rows=rows, aspect_ratio=aspect_ratio, label=label).encode("utf-8"),
         "blank.png": solid_png(40, 1, (0, 0, 0, 0)),
-        "pixel-black.png": solid_png(40, 40, (0, 0, 0, 255)),
+        # Keep notes square, but outside the atlas so head/tail edges stay opaque.
+        "pixel-black.png": solid_png(1024, 1024, (0, 0, 0, 255)),
         # A tall texture bypasses lazer's 1024px atlas (976px usable height).
         # Its black-border shortcut leaves transparent padding on a 1px sprite,
         # creating a grey gradient when linear filtering stretches the body.

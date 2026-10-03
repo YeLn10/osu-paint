@@ -85,7 +85,7 @@
 
 同一画面、同一列连续亮格才合并，下方为头、上方为尾，不跨空格或不同画面。[DrawableHoldNote](https://github.com/ppy/osu/blob/master/osu.Game.Rulesets.Mania/Objects/Drawables/DrawableHoldNote.cs) 将身体连接到头尾中部，尾部贴图向上延伸；当前预览按尾底边减一行到头底边的整个跨度裁剪。头越过舞台后仍绘制可见尾部，不通过提前隐藏制造清场。
 
-短音符及长条头、身体、尾均为不透明纯黑。[LegacyBodyPiece](https://github.com/ppy/osu/blob/master/osu.Game.Rulesets.Mania/Skinning/Legacy/LegacyBodyPiece.cs) 的颜色调暗不会把黑色变成灰色，整体 Alpha 淡出仍受客户端生命周期控制。身体改为 40×1024，绕过已安装框架对纯黑图集边缘的上传优化，避免原 40×1 贴图拉伸时混入透明边缘造成灰色。根因、框架探测和采样验证见 [皮肤说明](../skin.md)。
+短音符及长条头、身体、尾均为不透明纯黑。[LegacyBodyPiece](https://github.com/ppy/osu/blob/master/osu.Game.Rulesets.Mania/Skinning/Legacy/LegacyBodyPiece.cs) 的颜色调暗不会把黑色变成灰色，整体 Alpha 淡出仍受客户端生命周期控制。身体改为 40×1024，绕过已安装框架对纯黑图集边缘的上传优化，避免原 40×1 贴图拉伸时混入透明边缘造成灰色。短音符与长条头尾原来的 40×40 贴图也受同一图集边缘问题影响，2026-10-03 改为保持正方形比例的 1024×1024 独立纹理；五套皮肤的双轴边缘／角落采样回归验证 Alpha 始终为 1。此次不改变排帧、清场距离或判定余量，仍保留未知相位命中过渡的反例。根因、框架探测和采样验证见 [皮肤说明](../skin.md)。
 
 ## 回归与边界
 

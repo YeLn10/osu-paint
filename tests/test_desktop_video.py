@@ -109,6 +109,17 @@ class DesktopVideoTests(unittest.TestCase):
         self.app._refresh_preview()
         self.assertEqual(self.app.plan, plan)
 
+    def test_new_video_import_defaults_to_holds_without_mutating_current_project(self):
+        self.app.merge_holds.set(False)
+        before = self.app._project_data()
+        self.open_video_dialog()
+        self.assertTrue(self.app.video_merge_holds.get())
+        self.assertEqual(self.app._project_data(), before)
+        with patch("osu_paint_desktop.read_video", return_value=video_result()) as importer:
+            self.app.video_start_button.invoke()
+            self.wait_for(lambda: not self.app.importing)
+        self.assertTrue(importer.call_args.kwargs["merge_holds"])
+
     def test_wide_video_options_reach_importer_without_special_mode(self):
         self.open_video_dialog()
         for key, value in dict(fps="4", width="18", height="2").items():
@@ -129,7 +140,7 @@ class DesktopVideoTests(unittest.TestCase):
         self.assertEqual(self.app.video_refresh_hz.get(), "60")
         for key, value in dict(fps="17", width="18", height="24").items():
             self.app.video_fields[key].set(value)
-        self.app.video_merge_holds.set(True)
+        self.app.video_merge_holds.set(False)
         self.assertEqual(self.app.video_fields["height"].get(), "24")
         self.assertEqual(self.app.video_fields["fps"].get(), "17")
         preview = {"frame": [".#", "#."], "source_ppm": b"P6\n1 1\n255\n\xff\xff\xff",
@@ -143,7 +154,7 @@ class DesktopVideoTests(unittest.TestCase):
         for call in (reader.call_args, importer.call_args):
             self.assertEqual({key: call.kwargs[key] for key in ("fps", "width", "height", "refresh_hz")},
                              dict(fps=17, width=18, height=24, refresh_hz=60))
-            self.assertTrue(call.kwargs["merge_holds"])
+            self.assertFalse(call.kwargs["merge_holds"])
             self.assertNotIn("refresh_phase_ms", call.kwargs)
             self.assertNotIn("game_fps", call.kwargs)
 

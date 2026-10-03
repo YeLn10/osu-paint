@@ -171,7 +171,7 @@ class PaintApp:
             variable.trace_add("write", lambda *args, field=key: self._parameter_changed(field))
         self.entries["transition_ms"].configure(state="disabled")
         self.timing_mode.trace_add("write", self._mode_changed)
-        self.merge_holds = tk.BooleanVar(value=False)
+        self.merge_holds = tk.BooleanVar(value=True)
         ttk.Checkbutton(left, text="连续单键转长条（同列相邻亮格，不跨空格 / 帧）", variable=self.merge_holds,
                         command=self._changed).grid(row=8, column=0, sticky="w", pady=(8, 0))
 
@@ -395,6 +395,7 @@ class PaintApp:
             return
         rows = simpledialog.askinteger("新建画布", "图案行数：", initialvalue=6, minvalue=1, parent=self.root)
         if rows is not None:
+            self.merge_holds.set(True)
             self.video, self.audio_data = None, None
             self.frames, self.selected = [["." * keys for _ in range(rows)]], 0
             self.frame_times = [self.uniform_times.copy()]
@@ -589,7 +590,7 @@ class PaintApp:
         invert = ttk.Checkbutton(panel, text="亮暗反转", variable=self.video_invert)
         invert.grid(row=8, column=0, sticky="w", pady=5)
         inputs.append(invert)
-        self.video_merge_holds = tk.BooleanVar(value=self.merge_holds.get())
+        self.video_merge_holds = tk.BooleanVar(value=True)
         hold_option = ttk.Checkbutton(panel, text="连续单键转长条", variable=self.video_merge_holds)
         hold_option.grid(row=8, column=1, sticky="w", pady=5)
         inputs.append(hold_option)

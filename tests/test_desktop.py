@@ -34,6 +34,23 @@ class DesktopTests(unittest.TestCase):
             time.sleep(0.01)
         self.assertFalse(self.app.exporting, "Export did not finish")
 
+    def test_new_projects_default_to_holds_without_changing_existing_choices(self):
+        self.assertTrue(self.app.merge_holds.get())
+        self.assertTrue(self.app.plan["merge_holds"])
+        self.app.merge_holds.set(False)
+        saved = self.app._project_data()
+        self.app.load_project(saved)
+        self.assertFalse(self.app.merge_holds.get())
+        with patch.object(self.app, "_can_discard", return_value=True), \
+                patch("osu_paint_desktop.simpledialog.askinteger", side_effect=[2, None]):
+            self.app.new_pattern()
+        self.assertEqual(self.app._project_data(), saved)
+        with patch.object(self.app, "_can_discard", return_value=True), \
+                patch("osu_paint_desktop.simpledialog.askinteger", side_effect=[2, 3]):
+            self.app.new_pattern()
+        self.assertTrue(self.app.merge_holds.get())
+        self.assertEqual(self.app.frames, [[".."] * 3])
+
     def test_hold_option_round_trips_and_old_projects_default_to_singles(self):
         self.app.merge_holds.set(True)
         self.app._changed()
@@ -76,7 +93,7 @@ class DesktopTests(unittest.TestCase):
         self.assertIn("pixel-film*.osk", help_text)
 
     def test_initial_preview_reuses_compiler(self):
-        self.assertEqual(self.app.plan, compile_frames([HEART], 2000, 4000, fast_clear=True))
+        self.assertEqual(self.app.plan, compile_frames([HEART], 2000, 4000, fast_clear=True, merge_holds=True))
         self.assertFalse(self.app.dirty)
         self.assertEqual(str(self.app.export_button["state"]), "normal")
 

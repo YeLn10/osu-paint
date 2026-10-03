@@ -83,15 +83,17 @@ class SkinTests(unittest.TestCase):
                 self.assertEqual(section.get("StageRight"), "blank")
 
     def test_single_notes_and_all_hold_parts_are_opaque_black_on_white(self):
+        images = {name: png_pixels(self.archive.read(name))
+                  for name in ("pixel-black.png", "pixel-body.png")}
         for keys, section in self.sections.items():
             for column in range(keys):
                 with self.subTest(keys=keys, column=column):
                     self.assertEqual(section[f"Colour{column + 1}"], "255,255,255,255")
                     for suffix in ("", "H", "L", "T"):
                         name = section[f"NoteImage{column}{suffix}"] + ".png"
-                        width, height, pixels = png_pixels(self.archive.read(name))
-                        self.assertEqual(width, 40)
-                        self.assertEqual(height, 1024 if suffix == "L" else 40)
+                        width, height, pixels = images[name]
+                        self.assertEqual(width, 40 if suffix == "L" else 1024)
+                        self.assertEqual(height, 1024)
                         self.assertEqual(pixels, b"\x00\x00\x00\xff" * width * height)
 
     def test_stretched_body_stays_black_after_lazer_atlas_and_linear_sampling(self):
@@ -115,6 +117,34 @@ class SkinTests(unittest.TestCase):
 
                 sampled = alpha(lower) * (1 - fraction) + alpha(lower + 1) * fraction
                 self.assertEqual(sampled, 255, (filename, v, "white background reveals grey"))
+
+    def test_note_and_hold_caps_do_not_expose_white_at_filtered_edges(self):
+        # The same black-border atlas shortcut affects small square notes too,
+        # not just stretched bodies. Check both axes and corners on every skin.
+        for filename in SKIN_PROFILES:
+            with zipfile.ZipFile(ROOT / filename) as skin:
+                width, height, pixels = png_pixels(skin.read("pixel-black.png"))
+            self.assertEqual(width, height, "Keep the original note aspect ratio")
+            standalone = width > 1024 - 48 or height > 1024 - 48
+            for u in (0, .001, .5, .999, 1):
+                for v in (0, .001, .5, .999, 1):
+                    with self.subTest(skin=filename, u=u, v=v):
+                        x, y = u * width - .5, v * height - .5
+                        left, top = int(x // 1), int(y // 1)
+                        fx, fy = x - left, y - top
+
+                        def alpha(column, row):
+                            if not standalone and not (0 <= column < width and 0 <= row < height):
+                                return 0
+                            column = min(width - 1, max(0, column))
+                            row = min(height - 1, max(0, row))
+                            return pixels[(row * width + column) * 4 + 3]
+
+                        sampled = ((1 - fx) * (1 - fy) * alpha(left, top)
+                                   + fx * (1 - fy) * alpha(left + 1, top)
+                                   + (1 - fx) * fy * alpha(left, top + 1)
+                                   + fx * fy * alpha(left + 1, top + 1))
+                        self.assertAlmostEqual(sampled, 255, msg="Transparent edges reveal the white stage")
 
     def test_judgement_position_matches_lazer_compiler(self):
         for keys, section in self.sections.items():
