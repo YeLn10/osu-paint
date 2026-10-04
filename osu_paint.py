@@ -129,6 +129,7 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
         raise ValueError("至少需要一帧图案。")
     frames = parse_frames("\n---\n".join("\n".join(rows) for rows in frames),
                           allow_empty=allow_empty_frames)
+    has_notes = [any("#" in row for row in rows) for rows in frames]
     if not all(math.isfinite(v) for v in (scroll_speed, transition_ms)):
         raise ValueError("时间和滚速必须是有限数值。")
     if not 1 <= scroll_speed <= 40:
@@ -200,6 +201,9 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
         # (including the extended plateau before a shared sweep) at half a pixel.
         limit = 5000
         for i, first in enumerate(note_frames):
+            # Blank pictures cannot drift visibly or constrain other frames' sweeps.
+            if not has_notes[first]:
+                continue
             if i + 1 < len(frames) and note_frames[i + 1] == first:
                 continue
             until = frame_times[i][1]
@@ -263,12 +267,13 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
         first = note_frames[index]
         frame["note_frame"] = first
         frame["entry_start_ms"] = frame_plans[first]["entry_start_ms"]
-        drift = (timeline.position(frame["end_ms"]) - timeline.position(frame_plans[first]["start_ms"])) / time_range
+        drift = ((timeline.position(frame["end_ms"]) - timeline.position(frame_plans[first]["start_ms"])) / time_range
+                 if has_notes[index] else 0)
         if drift >= 0.5 / len(frame["pattern"]):
             raise ValueError("展示时间过长，图案会接近判定线；请缩短时间范围。")
         frame["drift_playfield_fraction"] = drift
         frame["drift_at_768px"] = drift * PLAYFIELD_HEIGHT
-        if index != first:
+        if index != first or not has_notes[index]:
             continue
         rows = frame["pattern"]
         # Legacy lazer notes extend upward from their bottom anchor. Keep the

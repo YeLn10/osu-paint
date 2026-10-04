@@ -268,6 +268,38 @@ class ExportTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "至少"):
             compile_frames([[".."]], 2000, 3000, allow_empty_frames=True)
 
+    def test_empty_picture_drift_does_not_slow_the_whole_video(self):
+        transition = minimum_transition_ms(27)
+        for blank_count, blank_ms in ((1, 10000), (1, 60000), (200, 50)):
+            for merged in (False, True):
+                with self.subTest(blank_count=blank_count, blank_ms=blank_ms, holds=merged):
+                    frames = [["#."] * 24] + [[".."] * 24] * blank_count + [[".#"] * 24]
+                    starts = [2000] + [2050 + i * blank_ms for i in range(blank_count + 1)]
+                    windows = [(start, starts[i + 1] - transition) for i, start in enumerate(starts[:-1])]
+                    windows.append((starts[-1], starts[-1] + 50))
+                    plan = compile_frames(frames, frame_times=windows, fast_clear=True,
+                                          allow_empty_frames=True, anchor_reference=True, merge_holds=merged)
+                    self.assertGreater(plan["base_beat_length_ms"], 4000)
+                    self.assertLess(plan["sweep_ms"], .08)
+                    self.assertLessEqual(plan["drift_at_768px"], .5)
+                    self.assertEqual([(f["start_ms"], f["end_ms"]) for f in plan["frames"]], windows)
+                    self.assertEqual({n["frame"] for n in plan["notes"]}, {0, len(frames) - 1})
+                    self.assertTrue(all(f["drift_playfield_fraction"] == 0 for f in plan["frames"][1:-1]))
+                    text = encode_osu(plan)
+                    points, _ = decode(text)
+                    objects = [line.split(",") for line in text.split("[HitObjects]\n")[1].splitlines()]
+                    heads = [position(points, float(n[2]), plan["time_range_ms"]) for n in objects]
+                    tails = [position(points, float(n[5].split(":")[0]), plan["time_range_ms"])
+                             if n[3] == "128" else head for n, head in zip(objects, heads)]
+                    # Empty intervals stay empty after actual .osu decoding and
+                    # per-segment float32 rounding, including both boundaries.
+                    for now in (windows[1][0], (windows[1][0] + windows[-2][1]) / 2, windows[-2][1]):
+                        current = position(points, now, plan["time_range_ms"])
+                        self.assertFalse(any(1 - head + current > 1e-6 and 1 - tail + current - 1 / 24 < 1 - 1e-6
+                                             for head, tail in zip(heads, tails)))
+                    for obj, note in zip(objects, plan["notes"]):
+                        self.assertGreater(float(obj[2]), plan["frames"][note["frame"]]["sweep_start_ms"])
+
     def test_fast_clear_limits_reference_speed_using_the_whole_reused_picture(self):
         references = []
         transition = minimum_transition_ms(27)
