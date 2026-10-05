@@ -4,9 +4,9 @@
 
 本次记录中可确认的直接原因是客户端 `FrameStabilityContainer` 的时间差保护进入持续拒绝状态，不是导出文件缺少后半段。它会停止更新音符区域而不停止音频。最初为何出现足够大的时间差尚未确认，不能仅凭警告中的 BASS 名称认定音频驱动有错，也不能把单线程或显卡当成已证实根因。
 
-观看这类谱面时，可退出当前游玩、启用 **Autoplay（AT）** 后重新播放。AT 使用回放处理器，避开本次确认的保护分支；只开 No Fail 不会避开它。**Cinema（CN）不适用**：虽然同样使用自动回放，`ModCinema<T>.ApplyToDrawableRuleset` 还会隐藏整个音符区域，而本项目的画面正是由音符组成。
+**撤回 Autoplay（AT）的观看推荐**：用户随后反馈，实机启用 AT 后出现强烈频闪。AT 使用回放处理器，确实避开本次确认的保护分支，但这不足以说明实际播放可用。只开 No Fail 不会避开该分支。**Cinema（CN）也不适用**：虽然同样使用自动回放，`ModCinema<T>.ApplyToDrawableRuleset` 还会隐藏整个音符区域，而本项目的画面正是由音符组成。
 
-本次没有修改客户端 DLL、游戏设置、谱面、音频或生成器。AT 是针对这一机制的绕过办法，不是客户端代码修复；还没有完成用户问题谱面开启 AT 后的整段实机验证。
+本次没有修改客户端 DLL、游戏设置、谱面、音频或生成器。AT 对照仅保留为时钟分支的诊断证据，不再作为解决方案；目前尚未确认能同时消除该定格与强烈频闪的正常播放方案。下表是隔离时钟结果，不能覆盖随后收到的实机负面反馈。
 
 ## 版本与证据
 
@@ -68,6 +68,12 @@ dotnet exec --runtimeconfig "$game\osu!.runtimeconfig.json" --depsfile "$game\os
 # 同一个探针，唯一对照条件为接入实际 AT 回放处理器：
 dotnet exec --runtimeconfig "$game\osu!.runtimeconfig.json" --depsfile "$game\osu!.deps.json" build/freeze-diagnostics/ClockFreezeProbe.dll $game --autoplay --assert-progress
 ```
+
+## 实机反馈与推荐撤回
+
+2026-10-05，用户在启用 AT 后反馈“强烈的频闪”，要求继续优化正常播放路径，并同时考虑 stable 与 lazer。因此撤回先前基于隔离时钟实验给出的观看推荐，保留上述实验用于解释定格机制。
+
+实际 AT 处理器会逐个消费回放事件；时钟探针没有运行完整音符子树、绘制或真实的每帧追赶耗时，不能拿其 `Valid` 状态或时间一致结果证明视觉稳定。AT 频闪的具体成因仍需单独复现，暂不把追赶负载、判定动画或采样相位中的任一个写成已证实根因。
 
 ## 尚未验证的边界
 

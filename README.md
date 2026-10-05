@@ -223,7 +223,7 @@ python osu_paint.py examples/pulse.txt --start-ms 2000 --end-ms 5000 --output ou
 
 目标 lazer `2026.921.0` 存在一种已复现的客户端时钟定格：音符区域追赶音频时触发 500 ms 时间差保护，之后持续拒绝更新，但音频仍然播放。日志会出现 `Ignoring likely invalid time value provided by BASS during gameplay`，连续异常最多记录 10 次；不能因后面没有报错就认为已恢复。
 
-遇到这种情况，可退出本次游玩，在 Mods 中改用 **Autoplay（AT，自动演奏）** 再播放，而不是只开 No Fail。已用安装版本的实际 DLL 和 mania 自动演奏回放验证：相同时间输入下，AT 能绕过这条会锁住时钟的分支。**不要改用 Cinema（CN）**，它会隐藏用于显示图案的音符区域。无需重新导出谱面或调整 SV；AT 的整段实机播放仍需确认，不能据此保证没有其他卡顿或残影。诊断依据与验证边界见 [客户端时钟定格记录](docs/research/lazer-clock-freeze.md)。
+**不再推荐用 Autoplay（AT）作为观看方案**：安装版本的 DLL 对照证明它能绕过这条时钟保护，但随后用户实机反馈 AT 会造成强烈频闪。该对照只能解释定格机制，不能证明视觉效果可用。只开 No Fail 不会避开此保护；Cinema（CN）会隐藏用于显示图案的音符区域，同样不适用。当前尚无经过实机确认、同时解决定格与频闪的方案，不应为此盲目调整 SV 或重新导出。诊断依据、实机反馈与验证边界见 [客户端时钟定格记录](docs/research/lazer-clock-freeze.md)。
 
 ## 原理和验证
 
