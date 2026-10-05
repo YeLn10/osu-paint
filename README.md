@@ -219,6 +219,12 @@ python osu_paint.py examples/pulse.txt --start-ms 2000 --end-ms 5000 --output ou
 
 两秒示例的理论漂移约 **0.252 像素 / 768 内部像素高度**，实际屏幕像素按显示高度缩放。预览只是位置模型，不模拟游戏的判定、淡入淡出和物件生命周期。12 ms 的快段也可能被显示器采到，不能保证完全无过渡帧。
 
+### 画面定格但音乐继续
+
+目标 lazer `2026.921.0` 存在一种已复现的客户端时钟定格：音符区域追赶音频时触发 500 ms 时间差保护，之后持续拒绝更新，但音频仍然播放。日志会出现 `Ignoring likely invalid time value provided by BASS during gameplay`，连续异常最多记录 10 次；不能因后面没有报错就认为已恢复。
+
+遇到这种情况，可退出本次游玩，在 Mods 中改用 **Autoplay（AT，自动演奏）** 再播放，而不是只开 No Fail。已用安装版本的实际 DLL 和 mania 自动演奏回放验证：相同时间输入下，AT 能绕过这条会锁住时钟的分支。**不要改用 Cinema（CN）**，它会隐藏用于显示图案的音符区域。无需重新导出谱面或调整 SV；AT 的整段实机播放仍需确认，不能据此保证没有其他卡顿或残影。诊断依据与验证边界见 [客户端时钟定格记录](docs/research/lazer-clock-freeze.md)。
+
 ## 原理和验证
 
 当前 lazer 的绿线 SV 被限制在 0.01–10，红线 beatLength 在 6–60000 ms。程序组合红线和绿线，并积分实际倍率来布置音符。慢段每 50 ms 切换到不同的合法 beatLength，避免长慢段变成参考 BPM。每条红线后都补同时间绿线。详细证据见 [调查报告](docs/research/mania-sv-animation.md)。
