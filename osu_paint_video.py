@@ -20,7 +20,7 @@ class ImportCancelled(Exception):
 
 def resolve_video_options(*, fps, width, height, start_ms, scroll_speed,
                           threshold=128, brightness=0, contrast=1, invert=False, fit="stretch",
-                          refresh_hz=None, merge_holds=False):
+                          refresh_hz=None, merge_holds=False, target_client="lazer"):
     if not math.isfinite(fps) or not 0 < fps <= 60:
         raise ValueError("视频 FPS 须大于 0 且不超过 60，可以填写小数。")
     if not isinstance(height, int) or not 1 <= height <= 128:
@@ -33,23 +33,23 @@ def resolve_video_options(*, fps, width, height, start_ms, scroll_speed,
         # Never add extra sweeps by rounding FPS up; tolerate a resolved float round-trip.
         divisor = max(math.ceil(refresh_hz / 60), 1, math.ceil(refresh_hz / fps - 1e-12))
         fps = refresh_hz / divisor
-        if minimum_transition_ms(scroll_speed) >= 1000 / refresh_hz:
+        if target_client == "lazer" and minimum_transition_ms(scroll_speed) >= 1000 / refresh_hz:
             raise ValueError("切帧无法放入一个刷新周期；请提高滚速或降低目标刷新率。")
     options = dict(fps=fps, width=width, height=height, start_ms=start_ms, scroll_speed=scroll_speed,
                    threshold=threshold, brightness=brightness,
-                   contrast=contrast, invert=invert, fit=fit)
+                   contrast=contrast, invert=invert, fit=fit, target_client=target_client)
     _validate_video_options(**options)
-    options.update(refresh_hz=refresh_hz, merge_holds=merge_holds)
+    options.update(refresh_hz=refresh_hz, merge_holds=merge_holds, target_client=target_client)
     return options
 
 
 def validate_video_options(**options):
     resolved = resolve_video_options(**options)
-    return minimum_transition_ms(resolved["scroll_speed"])
+    return minimum_transition_ms(resolved["scroll_speed"], resolved["height"], target_client=resolved["target_client"])
 
 
 def _validate_video_options(*, fps, width, height, start_ms, scroll_speed,
-                            threshold, brightness, contrast, invert, fit):
+                            threshold, brightness, contrast, invert, fit, target_client):
     if not math.isfinite(fps) or not 0 < fps <= 60:
         raise ValueError("视频 FPS 须大于 0 且不超过 60，可以填写小数。")
     if not isinstance(width, int) or width not in SUPPORTED_KEY_COUNTS:
@@ -64,10 +64,16 @@ def _validate_video_options(*, fps, width, height, start_ms, scroll_speed,
         raise ValueError("对比度须大于 0 且不超过 5。")
     if not isinstance(invert, bool) or fit not in ("stretch", "contain", "cover"):
         raise ValueError("反转或缩放方式无效。")
-    transition = minimum_transition_ms(scroll_speed)
+    transition = minimum_transition_ms(scroll_speed, height, target_client=target_client)
     if not math.isfinite(start_ms) or start_ms - transition < 100:
         raise ValueError("视频开始时间须为有限数值，并在进场前保留至少 100 ms。")
-    if 1000 / fps <= transition * 3:
+    if target_client == "stable":
+        period = 1000 / fps
+        available = min(math.floor(period + 1e-9),
+                        math.floor(start_ms + period + 1e-9) - math.ceil(start_ms))
+        if available < transition + 1:
+            raise ValueError(f"stable 的 {height} 行画面需 {transition} ms 切帧及至少 1 ms 展示；请降低 FPS 或减少行数。")
+    elif 1000 / fps <= transition * 3:
         raise ValueError("当前滚速不足以容纳此 FPS 的展示和切帧；请降低 FPS 或提高 lazer 滚速。")
     return transition
 
@@ -87,14 +93,15 @@ def _pixel_frame(block, width, *, threshold=128, brightness=0, contrast=1, inver
     return ["".join(pixels[row:row + width]) for row in range(0, len(pixels), width)]
 
 
-def preview_video_frame(path, *, frame_index=0, fps=10, width=10, height=24, start_ms=2000,
+def preview_video_frame(path, *, frame_index=0, fps=10, width=10, height=None, start_ms=2000,
                         scroll_speed=27, threshold=128, brightness=0,
                         contrast=1, invert=False, fit="stretch", cancel=None,
-                        refresh_hz=None, merge_holds=False):
+                        refresh_hz=None, merge_holds=False, target_client="lazer"):
+    height = (12 if target_client == "stable" else 24) if height is None else height
     resolved = resolve_video_options(fps=fps, width=width, height=height, start_ms=start_ms,
                                      scroll_speed=scroll_speed, threshold=threshold,
                                      brightness=brightness, contrast=contrast, invert=invert, fit=fit,
-                                     refresh_hz=refresh_hz, merge_holds=merge_holds)
+                                     refresh_hz=refresh_hz, merge_holds=merge_holds, target_client=target_client)
     fps, height = resolved["fps"], resolved["height"]
     if not isinstance(frame_index, int) or not 0 <= frame_index < MAX_VIDEO_FRAMES:
         raise ValueError(f"预览帧序号须在 1–{MAX_VIDEO_FRAMES} 之间。")
@@ -152,18 +159,19 @@ def _run_ffmpeg(arguments, cancel):
         return log
 
 
-def import_video(path, *, fps=10, width=10, height=24, start_ms=2000, scroll_speed=27,
+def import_video(path, *, fps=10, width=10, height=None, start_ms=2000, scroll_speed=27,
                  progress=None, cancel=None, threshold=128, brightness=0,
                  contrast=1, invert=False, fit="stretch",
-                 refresh_hz=None, merge_holds=False):
+                 refresh_hz=None, merge_holds=False, target_client="lazer"):
+    height = (12 if target_client == "stable" else 24) if height is None else height
     requested_fps, requested_height = fps, height
     resolved = resolve_video_options(fps=fps, width=width, height=height,
                                      start_ms=start_ms, scroll_speed=scroll_speed,
                                      threshold=threshold, brightness=brightness, contrast=contrast,
                                      invert=invert, fit=fit,
-                                     refresh_hz=refresh_hz, merge_holds=merge_holds)
+                                     refresh_hz=refresh_hz, merge_holds=merge_holds, target_client=target_client)
     fps, height = resolved["fps"], resolved["height"]
-    transition = minimum_transition_ms(scroll_speed)
+    transition = minimum_transition_ms(scroll_speed, height, target_client=target_client)
     path = Path(path).expanduser().resolve()
     if not path.is_file():
         raise ValueError("请选择存在的本地视频文件。")
@@ -202,9 +210,17 @@ def import_video(path, *, fps=10, width=10, height=24, start_ms=2000, scroll_spe
         # rounded period. Retain fractional refresh clocks such as 60000/1001.
         period_exact = (Fraction(1000) / Fraction(str(fps)) if refresh_hz is None else
                         Fraction(1000 * round(refresh_hz / fps)) / Fraction(str(refresh_hz)))
+        if target_client == "stable":
+            period_exact = (Fraction(1000) / Fraction(str(fps)).limit_denominator() if refresh_hz is None else
+                            Fraction(1000 * round(refresh_hz / fps)) / Fraction(str(refresh_hz)).limit_denominator())
         period = float(period_exact)
         origin = Fraction(str(start_ms))
-        if refresh_hz is None:
+        if target_client == "stable":
+            starts = [math.ceil(origin)] + [math.floor(origin + i * period_exact)
+                                           for i in range(1, count + 1)]
+            windows = [(starts[i], starts[i + 1] - (transition if i < count - 1 else 0))
+                       for i in range(count)]
+        elif refresh_hz is None:
             starts = [float(origin + i * period_exact) for i in range(count + 1)]
             windows = [(starts[i], starts[i + 1] - (transition if i < count - 1 else 0))
                        for i in range(count)]
@@ -224,7 +240,7 @@ def import_video(path, *, fps=10, width=10, height=24, start_ms=2000, scroll_spe
         report("正在编译谱面与视频时间轴…")
         plan = compile_frames(frames, scroll_speed=scroll_speed, frame_times=windows,
                               fast_clear=True, allow_empty_frames=True, anchor_reference=True,
-                              merge_holds=merge_holds)
+                              merge_holds=merge_holds, target_client=target_client)
         audio_data = None
         if re.search(r"^\s*Stream #0:\d+.*Audio:", log, re.MULTILINE):
             report("正在提取音乐并对齐视频开始时间…（可取消）")

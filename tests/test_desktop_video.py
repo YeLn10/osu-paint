@@ -68,10 +68,10 @@ class DesktopVideoTests(unittest.TestCase):
             self.app.import_video()
         self.root.update_idletasks()
 
-    def test_old_client_metadata_is_discarded_while_frames_and_audio_reopen(self):
+    def test_obsolete_fps_metadata_is_discarded_while_frames_and_audio_reopen(self):
         self.app._apply_video(video_result())
         data = copy.deepcopy(self.app._project_data())
-        data["target_client"] = "stable"
+        data.pop("target_client", None)
         data["video"].update(game_fps=60, frame_fps=10)
         data["video"].update(fps=10, height=24, duration_ms=200)
         data["frames"] = [["#."] * 24, [".#"] * 24]
@@ -129,7 +129,7 @@ class DesktopVideoTests(unittest.TestCase):
             self.wait_for(lambda: not self.app.importing)
         self.assertEqual(importer.call_args.kwargs["width"], 18)
         self.assertEqual(importer.call_args.kwargs["fps"], 4)
-        self.assertNotIn("target_client", importer.call_args.kwargs)
+        self.assertEqual(importer.call_args.kwargs["target_client"], "lazer")
         self.assertNotIn("reference_animation", importer.call_args.kwargs)
 
     def test_video_ui_automatically_aligns_without_phase_or_effective_parameter_controls(self):
@@ -357,11 +357,11 @@ class DesktopVideoTests(unittest.TestCase):
         self.assertIsNone(self.app.import_dialog)
         self.assertEqual(self.app._project_data(), before)
 
-    def test_only_lazer_is_available_and_scroll_speed_still_round_trips(self):
-        self.assertFalse(hasattr(self.app, "target_client"))
+    def test_default_lazer_and_scroll_speed_still_round_trip(self):
+        self.assertEqual(self.app.target_client.get(), "lazer")
         self.app.fields["scroll_speed"].set("31")
         saved = copy.deepcopy(self.app._project_data())
-        self.assertNotIn("target_client", saved)
+        self.assertEqual(saved["target_client"], "lazer")
         self.app.fields["scroll_speed"].set("27")
         self.app.load_project(saved)
         self.app._refresh_preview()

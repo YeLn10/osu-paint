@@ -1,0 +1,57 @@
+{
+  "sha256": "3ADC2D001AACCED5F92BA8AE24121980D5E23F5653F37D14CF4765BCA1ABD9F9",
+  "speed_results": [
+    {
+      "speed": 1,
+      "beat_length_ms": 500,
+      "duration_ms": 1000,
+      "distance_at_480px": 35
+    },
+    {
+      "speed": 27,
+      "beat_length_ms": 500,
+      "duration_ms": 1000,
+      "distance_at_480px": 945
+    },
+    {
+      "speed": 40,
+      "beat_length_ms": 500,
+      "duration_ms": 1000,
+      "distance_at_480px": 1400
+    }
+  ],
+  "reference_results": [
+    {
+      "points": [
+        [
+          0,
+          500
+        ],
+        [
+          100,
+          60000.0001
+        ],
+        [
+          170,
+          60000.0002
+        ]
+      ],
+      "end_ms": 230,
+      "reference_bpm": 120
+    },
+    {
+      "points": [
+        [
+          0,
+          500
+        ],
+        [
+          100,
+          500.001
+        ]
+      ],
+      "end_ms": 300,
+      "reference_bpm": 120
+    }
+  ]
+}

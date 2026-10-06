@@ -49,8 +49,16 @@ python tools/build_skin.py
 python -m unittest discover -s tests -p test_skin.py -v
 ```
 
-指定行数可用 `python tools/build_skin.py --rows 13`，提交前恢复默认 24 行。构建模块只用标准库，固定 ZIP 元数据；根目录五个 `.osk` 必须能从源码逐字节复现。
+指定行数可用 `python tools/build_skin.py --rows 13`，提交前恢复默认 24 行。构建模块只用标准库，固定 ZIP 元数据；根目录十个 `.osk`（两端各五个） 必须能从源码逐字节复现。
 
 回归检查所有键数与比例的配置、实际 RGBA、图集分配及边缘线性采样、资源引用、判定位置、按导出行数生成的高度及可复现性。位置检查重新解析 `.osu` 并独立积分，Node / Tk 检查全宽布局、底边锚点、行间连续和长条跨度。验证没有启动游戏；框架策略探测和采样计算不能替代 GPU 实机显示、判定淡出、舞台缩放或刷新相位验收。
 
 2026-10-03 交付验证：完整 137 项回归通过；按脚本重建根目录五个皮肤与 EXE，核对五个内置模块与源码一致，执行包内桌面入口确认默认长条，并从包内构建模块逐字节复现五套交付皮肤。边缘对照与验收摘要分别为 `build/white-edge-comparison.json`、`build/white-edge-validation.json`；缓存不进入 Git。
+
+## 统一工具的 stable 皮肤
+
+默认构建两套，各含上述五个比例；`--client lazer` / `--client stable` 可单独构建。lazer 文件名保持不变，stable 为 `pixel-film-stable.osk`、`pixel-film-stable-16x9.osk` 等，内部名称也单独区分。根目录两套均为 24 行，实际导出按画布行数生成所选客户端的五套，不能混用。
+
+stable 使用 `SplitStages: 0`、`SpecialStyle: 0`、`ColumnStart: 0`、`ColumnRight: 0`，合并 1–18K 并保留奇数列。每列宽度最多 100，所以低键数不会横向铺满（16:10 至少 8 列）；预览使用相同舞台宽度。1K 省略 `ColumnSpacing`，空列表会使原生皮肤加载失败。stable 额外提供透明判定/警告资源。头尾与身体沿用相同纯黑 PNG，但 lazer 的图集证据不能替代 stable GPU 验收。
+
+目标二进制、字段限制和依据见 [stable 皮肤证据](research/stable-skin-evidence.md)。原相邻 stable 工具未删除，合并不修改游戏安装或配置。
