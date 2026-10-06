@@ -8,6 +8,7 @@ import tkinter as tk
 import unittest
 from unittest.mock import patch
 
+from osu_paint import compile_frames
 from osu_paint_desktop import PaintApp
 
 
@@ -82,3 +83,93 @@ class DesktopClientTests(unittest.TestCase):
             self.assertFalse(self.app.exporting)
         self.assertEqual(captured[0]["target_client"], "stable")
         self.assertEqual(self.app.plan["target_client"], "lazer")
+
+    def open_video_dialog(self):
+        with patch("osu_paint_desktop.filedialog.askopenfilename", return_value="synthetic.mp4"), \
+                patch("osu_paint_desktop.messagebox.askyesno", return_value=True):
+            self.app.import_video()
+        self.root.update_idletasks()
+
+    def wait_for_import(self):
+        deadline = time.monotonic() + 5
+        while self.app.importing and time.monotonic() < deadline:
+            self.root.update()
+            time.sleep(.01)
+        self.assertFalse(self.app.importing)
+
+    def test_import_client_is_local_until_success_and_reaches_preview_and_import(self):
+        before = copy.deepcopy(self.app._project_data())
+        self.open_video_dialog()
+        self.assertEqual(tuple(self.app.video_client_choice["values"]), ("lazer", "stable"))
+        self.app.video_target_client.set("stable")
+        self.assertEqual(self.app.video_fields["height"].get(), "12")
+        self.assertEqual(self.app._project_data(), before)
+        preview = dict(frame=["#."], source_ppm=b"P6\n1 1\n255\n\xff\xff\xff", frame_index=0, time_ms=0)
+        with patch("osu_paint_desktop.preview_video_frame", return_value=preview) as reader:
+            self.app.video_preview_button.invoke()
+            self.wait_for_import()
+        self.assertEqual(reader.call_args.kwargs["target_client"], "stable")
+        self.assertEqual(self.app._project_data(), before)
+        self.assertEqual(str(self.app.video_client_choice["state"]), "readonly")
+        plan = compile_frames([["#."] * 12, [".#"] * 12], frame_times=[(2000, 2087), (2100, 2187)],
+                              fast_clear=True, merge_holds=True, target_client="stable")
+        video = dict(filename="synthetic.mp4", fps=10, width=2, height=12, start_ms=2000, duration_ms=200)
+        result = dict(plan=plan, video=video, audio=b"OggS synthetic")
+        with patch("osu_paint_desktop.read_video", return_value=result) as reader:
+            self.app.video_start_button.invoke()
+            self.wait_for_import()
+        self.assertEqual(reader.call_args.kwargs["target_client"], "stable")
+        self.assertEqual(self.app.plan["target_client"], "stable")
+        self.assertEqual(self.app._project_data()["target_client"], "stable")
+        self.assertEqual(self.app.client_choice.winfo_manager(), "")
+        self.assertEqual(self.app.client_display.winfo_manager(), "pack")
+
+    def test_import_client_switch_preserves_custom_rows_and_cancelled_project(self):
+        before = copy.deepcopy(self.app._project_data())
+        self.open_video_dialog()
+        self.app.video_fields["height"].set("7")
+        self.app.video_target_client.set("stable")
+        self.assertEqual(self.app.video_fields["height"].get(), "7")
+        self.app.video_target_client.set("lazer")
+        self.assertEqual(self.app.video_fields["height"].get(), "7")
+        self.app.video_cancel_button.invoke()
+        self.assertIsNone(self.app.import_dialog)
+        self.assertEqual(self.app._project_data(), before)
+
+    def test_automatic_transition_field_shows_actual_result_without_losing_manual_value(self):
+        self.app.fields["transition_ms"].set("12")
+        self.app._refresh_preview()
+        self.assertAlmostEqual(float(self.app.entries["transition_ms"].get()), self.app.plan["sweep_ms"], places=6)
+        self.assertEqual(self.app.fields["transition_ms"].get(), "12")
+        self.app.fast_clear.set(False)
+        self.app._timing_options_changed()
+        self.app._refresh_preview()
+        self.assertEqual(self.app.entries["transition_ms"].get(), "12")
+        self.assertEqual(str(self.app.entries["transition_ms"]["state"]), "normal")
+        self.app.fast_clear.set(True)
+        self.app._timing_options_changed()
+        self.app._refresh_preview()
+        self.assertAlmostEqual(float(self.app.entries["transition_ms"].get()), self.app.plan["sweep_ms"], places=6)
+
+    def test_free_mode_entry_edits_change_real_sweep_and_keep_frame_times(self):
+        project = self.app._project_data()
+        project.update(frames=[["#."] * 3, [".#"] * 3], frame_times=[["2000", "2200"], ["2220", "2400"]],
+                       timing_mode="自由模式", fast_clear=False)
+        self.app.load_project(project)
+        self.app._refresh_preview()
+        self.assertEqual(self.app.plan["frames"][0]["sweep_start_ms"], 2208)
+        before = copy.deepcopy(self.app.frame_times)
+        entry = self.app.entries["transition_ms"]
+        entry.delete(0, "end")
+        entry.insert(0, "16")
+        self.app._refresh_preview()
+        self.assertEqual(self.app.plan["frames"][0]["sweep_start_ms"], 2204)
+        self.assertEqual(self.app.frame_times, before)
+        self.assertEqual(self.app._project_data()["settings"]["transition_ms"], "16")
+
+    def test_explicit_default_sized_height_is_not_silently_reduced(self):
+        self.open_video_dialog()
+        self.app.video_fields["height"].set("24")
+        self.app.video_target_client.set("stable")
+        self.assertEqual(self.app.video_fields["height"].get(), "24")
+        self.app.video_cancel_button.invoke()

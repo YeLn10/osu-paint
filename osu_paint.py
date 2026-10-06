@@ -319,9 +319,11 @@ def _compile_lazer_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, t
             else:
                 # Hold the old picture longer; compress the sweep, not the saved
                 # frame windows. Old video projects benefit on re-export too.
-                entry_start = next_start - gap * 500 / reference_beat
+                # Manual timing must not be stretched to fill the whole gap.
+                duration = gap * 500 / reference_beat if fast_clear else sweep_ms
+                entry_start = next_start - duration
                 frame["sweep_start_ms"] = entry_start
-                points.append(Point(entry_start, fast_beat, min(10, 10 * transition_ms / gap)))
+                points.append(Point(entry_start, fast_beat, min(10, 10 * transition_ms / gap) if fast_clear else 10))
                 frame["exit_end_ms"] = next_start
     points.append(Point(end_ms + sweep_ms, reference_beat, 1))
     timeline = Timeline(points, reference_beat)

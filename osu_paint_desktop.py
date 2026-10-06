@@ -148,10 +148,13 @@ class PaintApp:
         self.timing_mode = tk.StringVar(value="均分模式")
         ttk.Combobox(timing_bar, textvariable=self.timing_mode, values=("均分模式", "自由模式"),
                      state="readonly", width=9).pack(side="left")
-        ttk.Label(timing_bar, text="客户端").pack(side="left", padx=(8, 4))
-        self.client_choice = ttk.Combobox(timing_bar, textvariable=self.target_client,
+        client_panel = ttk.Frame(timing_bar)
+        client_panel.pack(side="left", padx=(8, 4))
+        ttk.Label(client_panel, text="客户端 ").pack(side="left")
+        self.client_choice = ttk.Combobox(client_panel, textvariable=self.target_client,
                                          values=CLIENTS, state="readonly", width=7)
         self.client_choice.pack(side="left")
+        self.client_display = ttk.Label(client_panel, textvariable=self.target_client)
         self.target_client.trace_add("write", self._client_changed)
         self.fast_clear = tk.BooleanVar(value=True)
         ttk.Checkbutton(timing_bar, text="极速清场", variable=self.fast_clear,
@@ -175,6 +178,7 @@ class PaintApp:
             entry.grid(row=1, column=i, sticky="ew", padx=(0, 8), pady=(6, 0))
             self.entries[key] = entry
             variable.trace_add("write", lambda *args, field=key: self._parameter_changed(field))
+        self.automatic_transition = tk.StringVar(value="自动")
         self.entries["transition_ms"].configure(state="disabled")
         self.timing_mode.trace_add("write", self._mode_changed)
         self.merge_holds = tk.BooleanVar(value=True)
@@ -280,9 +284,9 @@ class PaintApp:
         messagebox.showinfo("时间与滚速说明",
                             "均分模式：所有帧平分总时间，先扣除切帧时间。\n"
                             "自由模式：选中一帧，填写本帧开始、结束时间。允许留空档，不能重叠；间隔须足够切帧。\n\n"
-                            "切帧时长：推进图案所需的时间。越短移动越快，越长越容易看到下落。远离的两帧分别退场、进场。\n"
-                            "极速清场：自动用合法最高速度计算时长，覆盖手动切帧值；lazer 使用小数时钟，stable 按整数像素行安排。不能保证零过渡画面。\n\n"
-                            "选择 stable 或 lazer；项目会保存客户端。相同画面会在漂移预算内复用音符。\n"
+                            "切帧时长：关闭极速清场后，手动值决定实际推进时长；短空档的剩余时间延长静置，远离的两帧分别退场、进场。\n"
+                            "极速清场：输入框显示自动计算的实际时长，手动值暂不生效；关闭后恢复原手动值。两端时间规则不同，不能保证零过渡画面。\n\n"
+                            "视频导入窗口选择 stable 或 lazer；导入后编辑区只显示项目目标。手绘项目可在编辑区选择。相同画面会在漂移预算内复用音符。\n"
                             "刷新率排帧：填写实际 Hz（支持 59.94、60000/1001），按整次刷新安排采样，避免取整时钟的长期错位。\n"
                             "视频按填写的屏幕刷新率自动安排换帧，音轨保持原开始时间。\n"
                             "连续单键转长条：同一帧同列的连续亮格合并，不跨空格；头、身体、尾均使用不透明纯黑贴图。\n\n"
@@ -588,8 +592,13 @@ class PaintApp:
         self.video_preview_result = None
         ttk.Label(panel, text=Path(filename).name, style="Heading.TLabel", wraplength=480).grid(
             row=0, column=0, columnspan=2, sticky="w", pady=(0, 14))
+        self.video_target_client = tk.StringVar(value=self.target_client.get())
+        ttk.Label(panel, text="目标客户端", style="Muted.TLabel").grid(row=1, column=0, sticky="w")
+        self.video_client_choice = ttk.Combobox(panel, textvariable=self.video_target_client,
+                                               values=CLIENTS, state="readonly", width=12)
+        self.video_client_choice.grid(row=1, column=1, sticky="ew", pady=5)
         self.video_fields = {}
-        inputs = []
+        inputs = [self.video_client_choice]
         for row, (key, label, value) in enumerate([
                 ("fps", "每秒帧数 / FPS（可填小数，≤60）", "10"),
                 ("width", "画面宽度 / 列（1–18）", "10"),
@@ -597,7 +606,7 @@ class PaintApp:
                 ("start_ms", "视频与音乐开始 / ms", self.uniform_times[0]),
                 ("threshold", "黑白阈值 / 0–255", "128"),
                 ("brightness", "亮度 / -255–255", "0"),
-                ("contrast", "对比度 / >0–5", "1")], 1):
+                ("contrast", "对比度 / >0–5", "1")], 2):
             ttk.Label(panel, text=label, style="Muted.TLabel").grid(row=row, column=0, sticky="w", padx=(0, 16), pady=5)
             variable = self.video_fields[key] = tk.StringVar(value=value)
             entry = ttk.Entry(panel, textvariable=variable, width=12)
@@ -605,16 +614,16 @@ class PaintApp:
             inputs.append(entry)
         self.video_invert = tk.BooleanVar(value=False)
         invert = ttk.Checkbutton(panel, text="亮暗反转", variable=self.video_invert)
-        invert.grid(row=8, column=0, sticky="w", pady=5)
+        invert.grid(row=9, column=0, sticky="w", pady=5)
         inputs.append(invert)
         self.video_merge_holds = tk.BooleanVar(value=True)
         hold_option = ttk.Checkbutton(panel, text="连续单键转长条", variable=self.video_merge_holds)
-        hold_option.grid(row=8, column=1, sticky="w", pady=5)
+        hold_option.grid(row=9, column=1, sticky="w", pady=5)
         inputs.append(hold_option)
         self.video_fit = tk.StringVar(value="拉伸")
-        ttk.Label(panel, text="缩放方式", style="Muted.TLabel").grid(row=9, column=0, sticky="w")
+        ttk.Label(panel, text="缩放方式", style="Muted.TLabel").grid(row=10, column=0, sticky="w")
         combo = ttk.Combobox(panel, textvariable=self.video_fit, values=("拉伸", "等比留边", "等比裁剪"), state="readonly", width=12)
-        combo.grid(row=9, column=1, pady=5)
+        combo.grid(row=10, column=1, pady=5)
         inputs.append(combo)
         self.video_refresh_hz = tk.StringVar(value="60")
         ttk.Label(panel, text="实际刷新率 / Hz（如 59.94、60000/1001）", style="Muted.TLabel").grid(row=11, column=0, sticky="w")
@@ -638,7 +647,7 @@ class PaintApp:
             options["scroll_speed"] = float(self.fields["scroll_speed"].get())
             options.update(invert=self.video_invert.get(),
                            fit={"拉伸": "stretch", "等比留边": "contain", "等比裁剪": "cover"}[self.video_fit.get()],
-                           merge_holds=self.video_merge_holds.get(), target_client=self.target_client.get())
+                           merge_holds=self.video_merge_holds.get(), target_client=self.video_target_client.get())
             try:
                 options["refresh_hz"] = float(Fraction(self.video_refresh_hz.get()))
             except (ValueError, ZeroDivisionError):
@@ -648,8 +657,24 @@ class PaintApp:
         def describe_options(*args):
             self.video_preview_label.set("参数或帧已修改，请点击预览刷新。")
 
+        # Client defaults may follow the selection until the user edits height;
+        # never silently discard a requested row count when switching clients.
+        height_edited = False
+
+        def height_changed(*args):
+            nonlocal height_edited
+            height_edited = True
+
+        def client_changed(*args):
+            nonlocal height_edited
+            if not height_edited:
+                self.video_fields["height"].set("12" if self.video_target_client.get() == "stable" else "24")
+                height_edited = False
+
+        self.video_fields["height"].trace_add("write", height_changed)
+        self.video_target_client.trace_add("write", client_changed)
         for variable in [*self.video_fields.values(), self.video_invert, self.video_fit, self.video_frame_index,
-                         self.video_refresh_hz, self.video_merge_holds]:
+                         self.video_refresh_hz, self.video_merge_holds, self.video_target_client]:
             variable.trace_add("write", describe_options)
 
         def cancel():
@@ -823,6 +848,17 @@ class PaintApp:
             self.root.after_cancel(self.preview_job)
             self.preview_job = None
         self._stop()
+        if self.video is None:
+            self.client_display.pack_forget()
+            self.client_choice.pack(side="left")
+        else:
+            self.client_choice.pack_forget()
+            self.client_display.pack(side="left")
+        self.entries["transition_ms"].configure(
+            state="disabled" if self.fast_clear.get() else "normal",
+            textvariable=self.automatic_transition if self.fast_clear.get() else self.fields["transition_ms"])
+        self.time_labels[2].configure(text="自动切帧 / ms" if self.fast_clear.get() else "切帧时长 / ms")
+        self.automatic_transition.set("自动")
         self.playback_hint.set(
             "stable · 向下滚动 · 固定滚速 · NF（不要 Auto）。\n合并 1–18K 舞台；低键数受列宽上限限制。"
             if self.target_client.get() == "stable" else
@@ -863,6 +899,7 @@ class PaintApp:
             self.seek_max = self.plan["end_ms"] + self.plan["transition_ms"] + 180
             self.seek.configure(from_=self.seek_min, to=self.seek_max)
             self.seek_time.set(self.plan["frames"][self.selected]["start_ms"])
+            self.automatic_transition.set(number(self.plan["sweep_ms"]))
             warning = refresh_warning(self.plan)
             self._status(f"{self.plan['target_client']} · {self.plan['keys']}K · {len(self.frames)} 帧 · {len(self.plan['notes'])} 音符 · "
                          f"{'极速' if self.fast_clear.get() else ''}切帧 {self.plan['sweep_ms']:.3f} ms · "
