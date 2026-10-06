@@ -627,7 +627,7 @@ class PaintApp:
         inputs.append(combo)
         self.video_refresh_hz = tk.StringVar(value="60")
         ttk.Label(panel, text="实际刷新率 / Hz（如 59.94、60000/1001）", style="Muted.TLabel").grid(row=11, column=0, sticky="w")
-        refresh_entry = ttk.Spinbox(panel, textvariable=self.video_refresh_hz, from_=20, to=1000, width=12)
+        refresh_entry = ttk.Spinbox(panel, textvariable=self.video_refresh_hz, from_=20, to=1000, width=12, foreground="#000000")
         refresh_entry.grid(row=11, column=1, pady=5)
         inputs.append(refresh_entry)
         self.video_frame_index = tk.StringVar(value="1")

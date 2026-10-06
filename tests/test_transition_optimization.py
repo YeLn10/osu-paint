@@ -131,3 +131,31 @@ class TransitionOptimizationTests(unittest.TestCase):
         plan = compile_frames(frames, frame_times=windows, fast_clear=True, anchor_reference=True)
         self.assertEqual(len(plan["notes"]), 18 * 24 + 120)
         self.assertEqual(len(set(f["note_frame"] for f in plan["frames"])), 121)
+
+    def test_lazer_uses_moderate_reuse_when_maximum_speed_exceeds_the_load_cap(self):
+        frames = [["#."] * 24] * 60 + [[(".#" if i % 2 == 0 else "#.")] * 24 for i in range(20)]
+        transition = minimum_transition_ms(27)
+        windows = [(2000 + i * 50, 2000 + (i + 1) * 50 - transition) for i in range(len(frames))]
+        for merged in (False, True):
+            with self.subTest(holds=merged):
+                plan = compile_frames(frames, frame_times=windows, fast_clear=True,
+                                      anchor_reference=True, merge_holds=merged)
+                # Before: the 4900 ms candidate adds >10% redraws and is rejected;
+                # all 20 animated changes therefore keep the 0.4901 ms sweep.
+                self.assertLess(transition_exposure(plan), 6.5)
+                self.assertGreater(plan["base_beat_length_ms"], 1000)
+                self.assertLess(plan["base_beat_length_ms"], 3000)
+                self.assertLessEqual(len(set(f["note_frame"] for f in plan["frames"])), 23)
+                self.assertLessEqual(len(plan["notes"]), 23 * (1 if merged else 24))
+                self.assertEqual([(f["start_ms"], f["end_ms"]) for f in plan["frames"]], windows)
+                points, _ = lazer_decode(encode_osu(plan))
+                for note in plan["notes"]:
+                    frame = plan["frames"][note["frame"]]
+                    now = lazer_position(points, frame["sweep_start_ms"], plan["time_range_ms"])
+                    drift = (now - lazer_position(points, frame["start_ms"], plan["time_range_ms"])) * 768
+                    self.assertLessEqual(drift, .5001)
+                    for row, time in ((note["row"], note["time_ms"]),
+                                      (note.get("end_row", note["row"]), note.get("end_time_ms", note["time_ms"]))):
+                        self.assertGreater(time, frame["sweep_start_ms"])
+                        y = 1 - lazer_position(points, float(f"{time:.9f}"), plan["time_range_ms"]) + now
+                        self.assertAlmostEqual(y, (row + 1) / 24 - 1 / 768, delta=1e-5)

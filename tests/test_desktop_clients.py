@@ -5,6 +5,7 @@ import tempfile
 import threading
 import time
 import tkinter as tk
+from tkinter import ttk
 import unittest
 from unittest.mock import patch
 
@@ -172,4 +173,13 @@ class DesktopClientTests(unittest.TestCase):
         self.app.video_fields["height"].set("24")
         self.app.video_target_client.set("stable")
         self.assertEqual(self.app.video_fields["height"].get(), "24")
+        self.app.video_cancel_button.invoke()
+
+    def test_refresh_rate_white_input_has_black_text(self):
+        self.open_video_dialog()
+        entry = next(widget for widget in self.app.video_inputs if isinstance(widget, ttk.Spinbox))
+        style = ttk.Style(self.root)
+        colour = entry.cget("foreground") or style.lookup(entry.cget("style") or entry.winfo_class(), "foreground")
+        self.assertEqual(self.root.winfo_rgb(colour), (0, 0, 0))
+        self.assertEqual(entry.get(), "60")
         self.app.video_cancel_button.invoke()

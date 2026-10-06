@@ -255,34 +255,41 @@ def _compile_lazer_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, t
 
     reference_beat = reference_for(note_frames, anchors) if fast_clear else 500
     if fast_clear and reference_beat < 4900:
-        candidate, candidate_anchors = list(range(len(frames))), initial_anchors.copy()
-        for i in range(1, len(frames)):
-            first = candidate[i - 1]
-            gap = frame_times[i][0] - frame_times[i - 1][1]
-            until = frame_times[i][1]
-            if i + 1 < len(frames) and frame_times[i + 1][0] - until <= 2 * transition_ms + 1e-7:
-                until = frame_times[i + 1][0]
-            anchored = candidate_anchors[first]
-            distance = anchored * .01 + (until - frame_times[first][0] - anchored) * 4900 / slow_beat * .01
-            if frames[i] == frames[i - 1] and gap <= 2 * transition_ms + 1e-7 and distance < reuse_distance * .98:
-                candidate[i], candidate_anchors[i] = first, 0
-        candidate_reference = reference_for(candidate, candidate_anchors)
-
         def internal_sweep_time(groups, reference):
             return sum(min(frame_times[i][0] - frame_times[i - 1][1], 2 * transition_ms)
                        for i in range(1, len(frames)) if groups[i] != groups[i - 1]) * 500 / reference
 
-        # Additional redraws are only worthwhile for a substantial total-window
-        # reduction. Exclude entry/exit so a static-only film stays continuous.
-        old_groups, new_groups = set(note_frames), set(candidate)
-        if (len(new_groups) <= 1.1 * len(old_groups)
-                and internal_sweep_time(candidate, candidate_reference) < .8 * internal_sweep_time(note_frames, reference_beat)):
-            # Do not trade flicker for a large object-load spike in dense scenes.
-            loads = {i: sum(1 for _ in _note_runs(frames[i], merge_holds)) for i in old_groups | new_groups}
-            if sum(loads[i] for i in new_groups) <= 1.1 * sum(loads[i] for i in old_groups):
+        # Keep both load caps tied to the ORIGINAL plan, not the last candidate.
+        old_groups = set(note_frames)
+        loads = {i: sum(1 for _ in _note_runs(frames[i], merge_holds)) for i in old_groups}
+        old_load = sum(loads.values())
+        best_time = .8 * internal_sweep_time(note_frames, reference_beat)
+        # Maximum speed may require too many redraws. Also try a modest 2x
+        # reference budget, without changing the drift or workload limits.
+        for budget in sorted({4900, min(4900, 2 * reference_beat)}, reverse=True):
+            candidate, candidate_anchors = list(range(len(frames))), initial_anchors.copy()
+            for i in range(1, len(frames)):
+                first = candidate[i - 1]
+                gap = frame_times[i][0] - frame_times[i - 1][1]
+                until = frame_times[i][1]
+                if i + 1 < len(frames) and frame_times[i + 1][0] - until <= 2 * transition_ms + 1e-7:
+                    until = frame_times[i + 1][0]
+                anchored = candidate_anchors[first]
+                distance = anchored * .01 + (until - frame_times[first][0] - anchored) * budget / slow_beat * .01
+                if frames[i] == frames[i - 1] and gap <= 2 * transition_ms + 1e-7 and distance < reuse_distance * .98:
+                    candidate[i], candidate_anchors[i] = first, 0
+            candidate_reference = reference_for(candidate, candidate_anchors)
+            candidate_time = internal_sweep_time(candidate, candidate_reference)
+            new_groups = set(candidate)
+            if len(new_groups) > 1.1 * len(old_groups) or candidate_time >= best_time:
+                continue
+            for i in new_groups - loads.keys():
+                loads[i] = sum(1 for _ in _note_runs(frames[i], merge_holds))
+            if sum(loads[i] for i in new_groups) <= 1.1 * old_load:
                 note_frames, anchors, reference_beat = candidate, candidate_anchors, candidate_reference
-                counts = [math.ceil((end - start - anchor) / 50)
-                          for (start, end), anchor in zip(frame_times, anchors)]
+                best_time = candidate_time
+        counts = [math.ceil((end - start - anchor) / 50)
+                  for (start, end), anchor in zip(frame_times, anchors)]
     sweep_ms = transition_ms * 500 / reference_beat
     points = [Point(0, reference_beat, 1), Point(start_ms - sweep_ms, fast_beat, 10)]
     frame_plans = []
