@@ -1,11 +1,14 @@
 """One public compiler/export API, with explicit client-specific semantics."""
 
+from contextlib import redirect_stdout
+import io
 from pathlib import Path
 import tempfile
 import unittest
 import zipfile
+from unittest.mock import patch
 
-from osu_paint import compile_frames, write_output
+from osu_paint import compile_frames, main, write_output
 from osu_paint_skin import SKIN_PROFILES, build_skin, build_skins, skin_filename
 from test_skin import mania_sections
 
@@ -59,3 +62,15 @@ class ClientTests(unittest.TestCase):
                     widths = list(map(float, section["ColumnWidth"].split(",")))
                     self.assertEqual(len(widths), keys)
                     self.assertTrue(all(0 < width <= 100 for width in widths))
+
+    def test_stable_cli_names_the_skin_that_was_actually_exported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "pixels.txt"
+            source.write_text("#\n#\n", encoding="utf-8")
+            output = io.StringIO()
+            with patch("sys.argv", ["osu_paint.py", str(source), "--client", "stable", "--start-ms", "2000",
+                                    "--end-ms", "2400", "--fast-clear", "--output", str(root / "out")]), redirect_stdout(output):
+                main()
+            self.assertIn("pixel-film-stable.osk", output.getvalue())
+            self.assertTrue((root / "out/pixel-film-stable.osk").exists())

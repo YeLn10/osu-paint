@@ -12,7 +12,7 @@ from pathlib import Path
 import wave
 import zipfile
 
-from osu_paint_skin import DEFAULT_ASPECT_RATIO, build_skins, column_width
+from osu_paint_skin import DEFAULT_ASPECT_RATIO, build_skins, column_width, skin_filename
 
 
 SUPPORTED_KEY_COUNTS = tuple(range(1, 19))
@@ -217,6 +217,7 @@ def _compile_lazer_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, t
               for (start, end), anchor in zip(frame_times, anchors)]
     if 60000 - (sum(counts) - 1) * 0.01 < 6:
         raise ValueError("展示时间过长，无法分配不同的合法慢速 BPM。")
+    initial_anchors = anchors.copy()
     note_frames = list(range(len(frames)))
     # Reuse identical pictures, but never bridge a deliberate gap
     # or let the total (including reference anchors) drift beyond half a row.
@@ -236,27 +237,52 @@ def _compile_lazer_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, t
               for (start, end), anchor in zip(frame_times, anchors)]
     if 60000 - (sum(counts) - 1) * 0.01 < 6:
         raise ValueError("展示时间过长，无法分配不同的合法慢速 BPM。")
-    reference_beat = 500
-    if fast_clear:
-        # A longer reference beat permits faster sweeps, but also increases slow
-        # drift. Keep the existing picture groups and cap their WHOLE held span
-        # (including the extended plateau before a shared sweep) at half a pixel.
+    def reference_for(groups, group_anchors):
+        # Include the extended plateau before a shared sweep, not just the
+        # original end of the last frame in a reused picture.
         limit = 5000
-        for i, first in enumerate(note_frames):
-            # Blank pictures cannot drift visibly or constrain other frames' sweeps.
-            if not has_notes[first]:
-                continue
-            if i + 1 < len(frames) and note_frames[i + 1] == first:
+        for i, first in enumerate(groups):
+            if not has_notes[first] or (i + 1 < len(frames) and groups[i + 1] == first):
                 continue
             until = frame_times[i][1]
             if i + 1 < len(frames) and frame_times[i + 1][0] - until <= 2 * transition_ms + 1e-7:
                 until = frame_times[i + 1][0]
-            anchored = anchors[first]
+            anchored = group_anchors[first]
             slow_time = until - frame_times[first][0] - anchored
             if slow_time > 0:
                 limit = min(limit, (reuse_distance - anchored * .01) * slow_beat / (slow_time * .01))
-        # Match lazer's millisecond beat grouping, with a little rounding margin.
-        reference_beat = max(500, math.floor(limit * .98 * 1000) / 1000)
+        return max(500, math.floor(limit * .98 * 1000) / 1000)
+
+    reference_beat = reference_for(note_frames, anchors) if fast_clear else 500
+    if fast_clear and reference_beat < 4900:
+        candidate, candidate_anchors = list(range(len(frames))), initial_anchors.copy()
+        for i in range(1, len(frames)):
+            first = candidate[i - 1]
+            gap = frame_times[i][0] - frame_times[i - 1][1]
+            until = frame_times[i][1]
+            if i + 1 < len(frames) and frame_times[i + 1][0] - until <= 2 * transition_ms + 1e-7:
+                until = frame_times[i + 1][0]
+            anchored = candidate_anchors[first]
+            distance = anchored * .01 + (until - frame_times[first][0] - anchored) * 4900 / slow_beat * .01
+            if frames[i] == frames[i - 1] and gap <= 2 * transition_ms + 1e-7 and distance < reuse_distance * .98:
+                candidate[i], candidate_anchors[i] = first, 0
+        candidate_reference = reference_for(candidate, candidate_anchors)
+
+        def internal_sweep_time(groups, reference):
+            return sum(min(frame_times[i][0] - frame_times[i - 1][1], 2 * transition_ms)
+                       for i in range(1, len(frames)) if groups[i] != groups[i - 1]) * 500 / reference
+
+        # Additional redraws are only worthwhile for a substantial total-window
+        # reduction. Exclude entry/exit so a static-only film stays continuous.
+        old_groups, new_groups = set(note_frames), set(candidate)
+        if (len(new_groups) <= 1.1 * len(old_groups)
+                and internal_sweep_time(candidate, candidate_reference) < .8 * internal_sweep_time(note_frames, reference_beat)):
+            # Do not trade flicker for a large object-load spike in dense scenes.
+            loads = {i: sum(1 for _ in _note_runs(frames[i], merge_holds)) for i in old_groups | new_groups}
+            if sum(loads[i] for i in new_groups) <= 1.1 * sum(loads[i] for i in old_groups):
+                note_frames, anchors, reference_beat = candidate, candidate_anchors, candidate_reference
+                counts = [math.ceil((end - start - anchor) / 50)
+                          for (start, end), anchor in zip(frame_times, anchors)]
     sweep_ms = transition_ms * 500 / reference_beat
     points = [Point(0, reference_beat, 1), Point(start_ms - sweep_ms, fast_beat, 10)]
     frame_plans = []
@@ -422,35 +448,41 @@ def _compile_stable_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, 
         used_beats.add(beat)
         points.append(Point(time, beat, sv))
 
-    entry_beat = reference_beat * transition_ms / (SWEEP_HEIGHT * time_range)
-    add_point(start_ms - transition_ms, entry_beat)
+    entry_ms = 1 if fast_clear else transition_ms
+    sweep_ms = entry_ms
+    entry_beat = reference_beat * entry_ms / (SWEEP_HEIGHT * time_range)
+    add_point(start_ms - entry_ms, entry_beat)
     frame_plans = [dict(pattern=rows, start_ms=start, end_ms=end, note_frame=first)
                    for rows, (start, end), first in zip(frames, windows, note_frames)]
     row_times = {}
-    entry_start = start_ms - transition_ms
+    entry_start = start_ms - entry_ms
     for group_index, first in enumerate(groups):
         following = groups[group_index + 1] if group_index + 1 < len(groups) else len(frames)
         last = following - 1
         start, end = windows[first][0], windows[last][1]
         shared_sweep = following < len(frames) and windows[following][0] - end <= 2 * transition_ms
-        sweep_start = windows[following][0] - transition_ms if shared_sweep else end
-        sweep_end = sweep_start + transition_ms
+        # Only actual note endpoints need integer slots. A hold does not need
+        # timestamps for its interior rows; its distance still spans those rows.
+        used_rows = sorted({row for _, top, bottom in _note_runs(frames[first], merge_holds)
+                            for row in (top, bottom)}, reverse=True) if fast_clear else list(range(height - 1, -1, -1))
+        duration = len(used_rows) + 1 if fast_clear else transition_ms
+        sweep_ms = max(sweep_ms, duration)
+        sweep_start = windows[following][0] - duration if shared_sweep else end
+        sweep_end = sweep_start + duration
         for i in range(first, following):
             frame_plans[i].update(entry_start_ms=entry_start, sweep_start_ms=sweep_start, exit_end_ms=sweep_end)
         for time in range(start, sweep_start, 50):
             add_point(time, slow_beat, slow_sv)
-        # Align each row to a different integer ms, rather than rounding a
-        # sub-ms uniform sweep and collapsing the rows into the same position.
-        stamps = [sweep_start + round((i + 1) * transition_ms / (height + 1)) for i in range(height)]
-        row_times[first] = dict(zip(range(height - 1, -1, -1), stamps))
+        stamps = [sweep_start + round((i + 1) * duration / (len(used_rows) + 1)) for i in range(len(used_rows))]
+        row_times[first] = dict(zip(used_rows, stamps))
         times = [sweep_start, *stamps, sweep_end]
-        distances = [0, *(1 / PLAYFIELD_HEIGHT + i / height for i in range(height)), SWEEP_HEIGHT]
+        distances = [0, *(1 / PLAYFIELD_HEIGHT + (height - 1 - row) / height for row in used_rows), SWEEP_HEIGHT]
         for t0, t1, d0, d1 in zip(times, times[1:], distances, distances[1:]):
             add_point(t0, reference_beat * (t1 - t0) / ((d1 - d0) * time_range))
         if not shared_sweep:
             points.append(Point(sweep_end, reference_beat, 1))
             if following < len(frames):
-                entry_start = windows[following][0] - transition_ms
+                entry_start = windows[following][0] - entry_ms
                 add_point(entry_start, entry_beat)
         else:
             entry_start = sweep_start
@@ -489,7 +521,7 @@ def _compile_stable_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, 
         "screen_aspect_ratio": DEFAULT_ASPECT_RATIO,
         "stage_width_fraction": column_width(len(frames[0][0]), target_client="stable") * len(frames[0][0]) / (480 * DEFAULT_ASPECT_RATIO),
         "start_ms": start_ms, "end_ms": end_ms,
-        "transition_ms": transition_ms, "sweep_ms": transition_ms, "scroll_speed": scroll_speed,
+        "transition_ms": transition_ms, "sweep_ms": sweep_ms, "scroll_speed": scroll_speed,
         "requested_transition_ms": requested_transition, "fast_clear": fast_clear,
         "timing_mode": timing_mode, "target_client": "stable", "merge_holds": merge_holds,
         "time_range_ms": time_range, "base_beat_length_ms": base,
@@ -677,7 +709,7 @@ def main():
     except (ValueError, OSError) as error:
         parser.error(str(error))
     print(f"已生成 {args.output.resolve() / 'pattern.osz'}")
-    print("请导入同目录中匹配屏幕比例的 pixel-film*.osk；默认 pixel-film.osk 适用于 16:10（3072×1920）。")
+    print(f"请导入同目录中匹配屏幕比例的 pixel-film*.osk；默认 {skin_filename('pixel-film.osk', plan['target_client'])} 适用于 16:10（3072×1920）。")
     print(f"{plan['keys']}K / {len(plan['frames'])} 帧 / {len(plan['notes'])} 音符 / 游戏滚速 {number(args.scroll_speed)}")
     print(f"单帧最大预计漂移 {plan['drift_at_768px']:.4f} px（768 px 高度），不是精确零速。")
     if refresh_warning(plan):
