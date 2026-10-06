@@ -231,7 +231,7 @@ python osu_paint.py examples/pulse.txt --start-ms 2000 --end-ms 5000 --output ou
 
 ## 原理和验证
 
-当前 lazer 的绿线 SV 被限制在 0.01–10，红线 beatLength 在 6–60000 ms。程序组合红线和绿线，并积分实际倍率来布置音符。慢段每 50 ms 切换到不同的合法 beatLength，避免长慢段变成参考 BPM。每条红线后都补同时间绿线。详细证据见 [调查报告](docs/research/mania-sv-animation.md)。
+当前 lazer 的绿线 SV 被限制在 0.01–10，红线 beatLength 在 6–60000 ms。程序组合红线和绿线，并积分实际倍率来布置音符。慢段先按 50 ms 分配不同的合法 beatLength，避免长慢段变成参考 BPM；极速模式再合并冗余慢段，合并跨度不超过参考 BPM 前导时长的一半，并保留参考锚点与所有进退场。每条红线后都补同时间绿线。详细证据见 [调查报告](docs/research/mania-sv-animation.md)。
 
 ```powershell
 python -m unittest discover -s tests -v
@@ -255,6 +255,8 @@ python tools/build_skin.py --client both
 统一程序仍不修改客户端；Auto 的强烈频闪与 lazer 的“音乐继续、画面定格”没有因此被证明解决。正常观看用 NF，不使用 Auto；诊断边界见 [lazer 定格记录](docs/research/lazer-clock-freeze.md)。
 
 ### 2026-10-06 切帧优化
+
+两端极速模式还会减少冗余近静止控制点，让导出的谱面更轻；例如静止 2 秒的合成画面，慢控制点从 40 个减到 3 个，参考 BPM、音符数和画面时间不变。lazer 不再因为预留切帧间隔较宽而降低极速清场的速度，仍使用既有速度上限；stable 的整数头尾与实际切帧时长不变。控制点变少不等于已证明客户端帧率提高、闪影消失或时钟定格修复。
 
 打开旧 JSON 项目、确认客户端和“极速清场”后重新导出即可使用本次优化，无需重新抽帧；切换客户端后若旧窗口不满足目标的时间预算，则需重新排帧。stable 稀疏画面/长条不再为未使用的端点行浪费清场时刻；lazer 对长静态片段采用有收益且限负载的复用策略。详细对照见 [验证记录](docs/research/merged-transition-optimization.md)。
 

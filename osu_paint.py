@@ -146,6 +146,22 @@ def _note_runs(rows, merge_holds):
             row += 1
 
 
+def _compact_slow_points(points, reference_beat):
+    # Each distinct slow red line must remain shorter than the reference lead-in.
+    # Keep a 2x margin, reference anchors and every sweep.
+    maximum_duration = points[1].time / 2
+    compacted = [points[0]]
+    for point, following in zip(points[1:-1], points[2:]):
+        previous = compacted[-1]
+        if (point.sv == previous.sv == .01
+                and min(point.beat_length, previous.beat_length) > reference_beat
+                and following.time - previous.time <= maximum_duration):
+            continue
+        compacted.append(point)
+    compacted.append(points[-1])
+    return compacted
+
+
 def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transition_ms=12,
                    *, frame_times=None, fast_clear=False, allow_empty_frames=False,
                    anchor_reference=False, merge_holds=False, target_client="lazer"):
@@ -278,8 +294,8 @@ def _compile_lazer_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, t
                 if groups[i] == groups[i - 1]:
                     continue
                 gap = frame_times[i][0] - frame_times[i - 1][1]
-                total += (gap * sweep_fraction(i - 1, i) if gap <= 2 * transition_ms + 1e-7
-                          else transition_ms * (sweep_fraction(i - 1) + sweep_fraction(following=i)))
+                total += transition_ms * (sweep_fraction(i - 1, i) if gap <= 2 * transition_ms + 1e-7
+                                          else sweep_fraction(i - 1) + sweep_fraction(following=i))
             return total * 500 / reference
 
         # Keep both load caps tied to the ORIGINAL plan, not the last candidate.
@@ -351,12 +367,14 @@ def _compile_lazer_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, t
                 # Hold the old picture longer; compress the sweep, not the saved
                 # frame windows. Old video projects benefit on re-export too.
                 # Manual timing must not be stretched to fill the whole gap.
-                duration = gap * 500 / reference_beat * sweep_fraction(index, index + 1) if fast_clear else sweep_ms
+                duration = sweep_ms * sweep_fraction(index, index + 1)
                 entry_start = next_start - duration
                 frame["sweep_start_ms"] = entry_start
-                points.append(Point(entry_start, fast_beat, min(10, 10 * transition_ms / gap) if fast_clear else 10))
+                points.append(Point(entry_start, fast_beat, 10))
                 frame["exit_end_ms"] = next_start
     points.append(Point(frame_plans[-1]["exit_end_ms"], reference_beat, 1))
+    if fast_clear:
+        points = _compact_slow_points(points, reference_beat)
     timeline = Timeline(points, reference_beat)
 
     for index in range(len(frame_plans) - 2, -1, -1):
@@ -523,6 +541,8 @@ def _compile_stable_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, 
                 add_point(entry_start, entry_beat)
         else:
             entry_start = sweep_start
+    if fast_clear:
+        points = _compact_slow_points(points, reference_beat)
     timeline = Timeline(points, reference_beat)
     notes = []
     for index, frame in enumerate(frame_plans):
