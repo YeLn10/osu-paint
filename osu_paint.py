@@ -171,7 +171,24 @@ def compile_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transiti
 def _compile_lazer_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transition_ms=12,
                    *, frame_times=None, fast_clear=False, allow_empty_frames=False,
                    anchor_reference=False, merge_holds=False):
-    has_notes = [any("#" in row for row in rows) for rows in frames]
+    bounds = []
+    for rows in frames:
+        lit = [row for row, pixels in enumerate(rows) if "#" in pixels]
+        bounds.append((lit[0], lit[-1]) if lit else None)
+    has_notes = [bound is not None for bound in bounds]
+
+    def sweep_fraction(previous=None, following=None):
+        if not fast_clear:
+            return 1
+        before = bounds[previous] if previous is not None else None
+        after = bounds[following] if following is not None else None
+        height = len(frames[0])
+        # Both pictures must fit: clear the old top and hide the new bottom.
+        # Keep the existing two-pixel clearance and full travel for empty pairs.
+        travel = max(SWEEP_HEIGHT - before[0] / height if before else 0,
+                     SWEEP_HEIGHT - (height - 1 - after[1]) / height if after else 0)
+        return travel / SWEEP_HEIGHT if travel else 1
+
     if not all(math.isfinite(v) for v in (scroll_speed, transition_ms)):
         raise ValueError("时间和滚速必须是有限数值。")
     if not 1 <= scroll_speed <= 40:
@@ -256,8 +273,14 @@ def _compile_lazer_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, t
     reference_beat = reference_for(note_frames, anchors) if fast_clear else 500
     if fast_clear and reference_beat < 4900:
         def internal_sweep_time(groups, reference):
-            return sum(min(frame_times[i][0] - frame_times[i - 1][1], 2 * transition_ms)
-                       for i in range(1, len(frames)) if groups[i] != groups[i - 1]) * 500 / reference
+            total = 0
+            for i in range(1, len(frames)):
+                if groups[i] == groups[i - 1]:
+                    continue
+                gap = frame_times[i][0] - frame_times[i - 1][1]
+                total += (gap * sweep_fraction(i - 1, i) if gap <= 2 * transition_ms + 1e-7
+                          else transition_ms * (sweep_fraction(i - 1) + sweep_fraction(following=i)))
+            return total * 500 / reference
 
         # Keep both load caps tied to the ORIGINAL plan, not the last candidate.
         old_groups = set(note_frames)
@@ -291,14 +314,15 @@ def _compile_lazer_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, t
         counts = [math.ceil((end - start - anchor) / 50)
                   for (start, end), anchor in zip(frame_times, anchors)]
     sweep_ms = transition_ms * 500 / reference_beat
-    points = [Point(0, reference_beat, 1), Point(start_ms - sweep_ms, fast_beat, 10)]
+    entry_start = start_ms - sweep_ms * sweep_fraction(following=0)
+    points = [Point(0, reference_beat, 1), Point(entry_start, fast_beat, 10)]
     frame_plans = []
     slow_index = 0
-    entry_start = start_ms - sweep_ms
 
     for index, (rows, (start, end), count) in enumerate(zip(frames, frame_times, counts)):
         frame = {"pattern": rows, "start_ms": start, "end_ms": end,
-                 "entry_start_ms": entry_start, "exit_end_ms": end + sweep_ms, "sweep_start_ms": end}
+                 "entry_start_ms": entry_start,
+                 "exit_end_ms": end + sweep_ms * sweep_fraction(index), "sweep_start_ms": end}
         frame_plans.append(frame)
         if anchors[index]:
             # Brief near-stationary reference segments keep that BPM dominant
@@ -320,19 +344,19 @@ def _compile_lazer_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, t
             if gap > 2 * transition_ms + 1e-7:
                 # Clear the old frame now, then bring the next in at its own start.
                 points.append(Point(end, fast_beat, 10))
-                points.extend([Point(end + sweep_ms, reference_beat, 1),
-                               Point(next_start - sweep_ms, fast_beat, 10)])
-                entry_start = next_start - sweep_ms
+                entry_start = next_start - sweep_ms * sweep_fraction(following=index + 1)
+                points.extend([Point(frame["exit_end_ms"], reference_beat, 1),
+                               Point(entry_start, fast_beat, 10)])
             else:
                 # Hold the old picture longer; compress the sweep, not the saved
                 # frame windows. Old video projects benefit on re-export too.
                 # Manual timing must not be stretched to fill the whole gap.
-                duration = gap * 500 / reference_beat if fast_clear else sweep_ms
+                duration = gap * 500 / reference_beat * sweep_fraction(index, index + 1) if fast_clear else sweep_ms
                 entry_start = next_start - duration
                 frame["sweep_start_ms"] = entry_start
                 points.append(Point(entry_start, fast_beat, min(10, 10 * transition_ms / gap) if fast_clear else 10))
                 frame["exit_end_ms"] = next_start
-    points.append(Point(end_ms + sweep_ms, reference_beat, 1))
+    points.append(Point(frame_plans[-1]["exit_end_ms"], reference_beat, 1))
     timeline = Timeline(points, reference_beat)
 
     for index in range(len(frame_plans) - 2, -1, -1):
@@ -378,6 +402,10 @@ def _compile_lazer_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, t
         raise ValueError("该时间组合改变了参考 BPM；请增加 start 或缩短 transition。")
 
     drift = max(frame["drift_playfield_fraction"] for frame in frame_plans)
+    if fast_clear:
+        sweep_ms = max(max(frame["exit_end_ms"] - frame["sweep_start_ms"],
+                           frame["start_ms"] - frame["entry_start_ms"])
+                       for i, frame in enumerate(frame_plans) if i == frame["note_frame"])
     return {
         "pattern": frames[0], "frames": frame_plans, "keys": len(frames[0][0]),
         "screen_aspect_ratio": DEFAULT_ASPECT_RATIO,
