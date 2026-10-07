@@ -45,6 +45,64 @@ class GhostPhaseTests(unittest.TestCase):
         counts, cuts = phase_counts(plan)
         self.assertLess(max(counts), .5 * len(cuts), (max(counts), len(cuts)))
 
+    def test_lazer_fast_sweeps_use_the_available_high_refresh_gap(self):
+        from osu_paint_video import _transition_phase_exposure
+        for hz, limit in ((240, 1), (360, 2), (480, 3), (1000, 5)):
+            with self.subTest(hz=hz):
+                plan = video_sequence('lazer', hz=hz)
+                worst, total = _transition_phase_exposure(plan, 1000 / hz, 2000)
+                self.assertLessEqual(worst, limit)
+                self.assertAlmostEqual(total, 64 * .612 * 500 / 4900, places=6)
+                self.assertEqual(len(plan['notes']), 65)
+
+    def test_stable_uses_safe_integer_slots_without_a_whole_ms_guard(self):
+        from osu_paint_video import _transition_phase_exposure
+        # Some rates have no better integer slots; preserve their previous score.
+        for hz, limit in ((60, 15), (120, 40), (144, 59), (165, 64)):
+            with self.subTest(hz=hz):
+                plan = video_sequence('stable', hz=hz)
+                worst, total = _transition_phase_exposure(plan, 1000 / hz, 2000)
+                self.assertLessEqual(worst, limit)
+                self.assertEqual(total, 192)
+                self.assertEqual(len(plan['notes']), 65)
+
+    def test_tighter_gap_rechecks_actual_cuts_after_compilation(self):
+        from osu_paint_video import compile_frames, _transition_phase_exposure
+        compiled = []
+        def compile_with_stale_estimate(*args, **kwargs):
+            plan = compile_frames(*args, **kwargs)
+            if not compiled:
+                # Simulate a stale estimate without faking candidate geometry.
+                plan['sweep_ms'] = .000001
+            compiled.append(plan)
+            return plan
+        with patch('osu_paint_video.compile_frames', side_effect=compile_with_stale_estimate):
+            result = video_sequence('lazer', hz=1000)
+        self.assertEqual(len(compiled), 2)
+        baseline, candidate = compiled
+        old_score = _transition_phase_exposure(baseline, 1, 2000)
+        new_score = _transition_phase_exposure(candidate, 1, 2000)
+        self.assertLess(new_score[0], old_score[0])
+        self.assertLessEqual(new_score[1], old_score[1] + 1e-7)
+        self.assertTrue(any(a['sweep_start_ms'] <= 2000 + i * 50 - 1
+                            for i, a in enumerate(candidate['frames'][:-1], 1)))
+        self.assertEqual(encode_osu(result), encode_osu(baseline))
+
+    def test_tighter_gap_preserves_a_better_existing_stable_candidate(self):
+        from osu_paint_video import compile_frames, _transition_phase_exposure
+        compiled = []
+        def record_compile(*args, **kwargs):
+            plan = compile_frames(*args, **kwargs)
+            compiled.append(plan)
+            return plan
+        with patch('osu_paint_video.compile_frames', side_effect=record_compile):
+            result = video_sequence('stable', hz=144)
+        self.assertEqual(len(compiled), 3)
+        _, previous, tighter = compiled
+        self.assertGreaterEqual(_transition_phase_exposure(tighter, 1000 / 144, 2000)[0],
+                                _transition_phase_exposure(previous, 1000 / 144, 2000)[0])
+        self.assertEqual(encode_osu(result), encode_osu(previous))
+
     def test_lazer_repeated_pictures_do_not_alias_the_phase_walk(self):
         plan = video_sequence('lazer', repeat=128, changes=16)
         counts, cuts = phase_counts(plan)
@@ -55,7 +113,8 @@ class GhostPhaseTests(unittest.TestCase):
         from test_stable_geometry import decode as stable_decode, position as stable_position
         for client, decoder, position in (("lazer", lazer_decode, lazer_position),
                                            ("stable", stable_decode, stable_position)):
-            for hz in (60, 120, 165, 60000 / 1001):
+            rates = (60, 120, 144, 165, 60000 / 1001) + ((240, 480, 1000) if client == "lazer" else ())
+            for hz in rates:
                 for merged in (False, True):
                     with self.subTest(client=client, hz=hz, merged=merged):
                         plan = video_sequence(client, changes=12, repeat=2, hz=hz, height=3,

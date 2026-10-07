@@ -277,32 +277,49 @@ def import_video(path, *, fps=10, width=10, height=None, start_ms=2000, scroll_s
                               fast_clear=True, allow_empty_frames=True, anchor_reference=True,
                               merge_holds=merge_holds, target_client=target_client)
         if refresh_hz is not None:
-            phases = _transition_phases(plan["frames"])
             refresh_period = period_exact / round(refresh_hz / fps)
-            if target_client == "stable":
-                # Use the core's actual integer sweep length, not a duplicate of
-                # its endpoint-slot algorithm. Leave 1 ms for flooring; long
-                # sweeps with no protected gap retain their original schedule.
-                span = max(0, refresh_period - plan["sweep_ms"] - 1)
-                # Apply a smooth offset BEFORE rounding. Interpolating rounded
-                # endpoints can introduce unnecessary 2 ms cadence jumps.
-                spread_starts = [starts[0]] + [math.floor(origin + i * period_exact - span * Fraction(phases[i]))
-                                              for i in range(1, count)] + [starts[-1]]
-            else:
-                guard = min(transition / 2, (float(refresh_period) - transition) / 4)
-                span = float(refresh_period) - transition - 2 * guard
-                spread_starts = [starts[0]] + [nominal_starts[i] - guard - span * phases[i]
-                                              for i in range(1, count)] + [starts[-1]]
-            spread_windows = [(spread_starts[i], spread_starts[i + 1] - (transition if i < count - 1 else 0))
-                              for i in range(count)]
-            # Keep the scheduling budget and minimum display duration. Near-limit
-            # FPS may have no room to shift boundaries; never silently reduce rows.
-            if spread_starts != starts and all(end - start >= (1 if target_client == "stable" else 1e-7)
-                                              for start, end in spread_windows):
+            # Retain the existing candidate first. Reclaim unused guard time only
+            # after compiling it, so tighter packing cannot undo earlier gains.
+            for actual_gap in (False, True):
+                phases = _transition_phases(plan["frames"])
+                if target_client == "stable":
+                    sweep = plan["sweep_ms"]
+                    span = max(0, refresh_period - sweep - (0 if actual_gap else 1))
+                    spread_starts = [starts[0]]
+                    for i in range(1, count):
+                        nominal = origin + i * period_exact
+                        shifted = math.floor(nominal - span * Fraction(phases[i]))
+                        if actual_gap:
+                            # First integer END whose sweep starts strictly after
+                            # the preceding refresh. Round the smooth offset once,
+                            # then clamp; interpolating rounded bounds adds jitter.
+                            earliest = math.floor(nominal - refresh_period) + sweep + 1
+                            shifted = min(math.floor(nominal), max(earliest, shifted))
+                        spread_starts.append(shifted)
+                    spread_starts.append(starts[-1])
+                else:
+                    sweep = plan["sweep_ms"] if actual_gap else transition
+                    guard = min(sweep / 2, (float(refresh_period) - sweep) / 4)
+                    span = float(refresh_period) - sweep - 2 * guard
+                    spread_starts = [starts[0]] + [nominal_starts[i] - guard - span * phases[i]
+                                                  for i in range(1, count)] + [starts[-1]]
+                spread_windows = [(spread_starts[i], spread_starts[i + 1] - (transition if i < count - 1 else 0))
+                                  for i in range(count)]
+                # Keep the original scheduling budget and minimum display time.
+                if (spread_starts == [f["start_ms"] for f in plan["frames"]] + [plan["end_ms"]] or
+                        any(end - start < (1 if target_client == "stable" else 1e-7)
+                            for start, end in spread_windows)):
+                    continue
                 _check_cancel(cancel)
                 candidate = compile_frames(frames, scroll_speed=scroll_speed, frame_times=spread_windows,
                                            fast_clear=True, allow_empty_frames=True, anchor_reference=True,
                                            merge_holds=merge_holds, target_client=target_client)
+                # Moving windows may change reuse groups and hence actual sweep
+                # lengths. Validate the recompiled cuts, not just the old estimate.
+                if actual_gap and any(a["note_frame"] != b["note_frame"] and
+                                      a["sweep_start_ms"] <= float(origin + i * period_exact - refresh_period) + 1e-7
+                                      for i, (a, b) in enumerate(zip(candidate["frames"], candidate["frames"][1:]), 1)):
+                    continue
                 worst, total = _transition_phase_exposure(plan, refresh_period, origin)
                 new_worst, new_total = _transition_phase_exposure(candidate, refresh_period, origin)
                 if new_worst < worst and new_total <= total + 1e-7 and len(candidate["notes"]) <= len(plan["notes"]):
