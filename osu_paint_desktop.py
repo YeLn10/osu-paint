@@ -288,7 +288,7 @@ class PaintApp:
         if key in ("start_ms", "end_ms"):
             values = self.frame_times[self.selected] if self.timing_mode.get() == "自由模式" else self.uniform_times
             values[0 if key == "start_ms" else 1] = self.fields[key].get()
-        self._changed()
+        self._changed(rebuild_frames=False)
         if alignment_removed:
             self._refresh_preview()
             notice = "已撤销刷新率／游戏帧率切帧设置；需重新导入视频才能重新对齐。"
@@ -352,17 +352,26 @@ class PaintApp:
         self.status.set(text)
         self.status_label.configure(foreground=ACCENT if error else MUTED)
 
-    def _update_editor(self):
+    def _frame_label(self, index):
+        timing = f"  ·  {self.frame_times[index][0]}–{self.frame_times[index][1]} ms" if self.timing_mode.get() == "自由模式" else ""
+        count = sum(row.count('#') for row in self.frames[index])
+        return f"  {index + 1:02d}    {count} 亮格{timing}"
+
+    def _update_editor(self, rebuild_frames=True):
         rows = self.frames[self.selected]
         self.editor_info.set(f"{len(rows[0])}K  ·  {len(rows)} 行  ·  第 {self.selected + 1} / {len(self.frames)} 帧")
-        self.frame_list.delete(0, "end")
-        items = []
-        for i, frame in enumerate(self.frames):
-            timing = f"  ·  {self.frame_times[i][0]}–{self.frame_times[i][1]} ms" if self.timing_mode.get() == "自由模式" else ""
-            count = sum(row.count('#') for row in frame)
-            items.append(f"  {i + 1:02d}    {'●' if i == self.selected else '○'}    {count} 亮格{timing}")
-        self.frame_list.insert("end", *items)
+        if rebuild_frames:
+            self.frame_list.delete(0, "end")
+            self.frame_list.insert("end", *(self._frame_label(i) for i in range(len(self.frames))))
+        else:
+            # A pixel/time edit or selection change does not affect the other rows.
+            top = self.frame_list.yview()[0]
+            self.frame_list.delete(self.selected)
+            self.frame_list.insert(self.selected, self._frame_label(self.selected))
+            self.frame_list.yview_moveto(top)
+        self.frame_list.selection_clear(0, "end")
         self.frame_list.selection_set(self.selected)
+        self.frame_list.activate(self.selected)
         self.frame_list.see(self.selected)
         self.delete_button.configure(state="normal" if len(self.frames) > 1 else "disabled")
         self.root.title(f"{'* ' if self.dirty else ''}osu!paint — 桌面图案编辑器")
@@ -409,11 +418,11 @@ class PaintApp:
         line = self.frames[self.selected][row]
         if line[col] != self.stroke_value:
             self.frames[self.selected][row] = line[:col] + self.stroke_value + line[col + 1:]
-            self._changed()
+            self._changed(rebuild_frames=False)
 
-    def _changed(self):
+    def _changed(self, rebuild_frames=True):
         self.dirty = True
-        self._update_editor()
+        self._update_editor(rebuild_frames=rebuild_frames)
         self._schedule_preview()
 
     def select_frame(self, event=None):
@@ -421,7 +430,7 @@ class PaintApp:
         if selection and selection[0] != self.selected:
             self.selected = selection[0]
             self._show_time_fields()
-            self._update_editor()
+            self._update_editor(rebuild_frames=False)
             self.seek_selected()
 
     def add_frame(self, duplicate=False):
@@ -881,14 +890,28 @@ class PaintApp:
     def edit_text(self):
         dialog = tk.Toplevel(self.root)
         dialog.title("编辑文本图案")
-        dialog.geometry(f"{round(520 * self.scale)}x{round(460 * self.scale)}")
+        dialog.geometry(f"{round(560 * self.scale)}x{round(480 * self.scale)}")
+        dialog.minsize(round(420 * self.scale), round(320 * self.scale))
         dialog.configure(background=BG)
         dialog.transient(self.root)
         dialog.grab_set()
-        ttk.Label(dialog, text="# = 音符，. = 空白；多帧以独立的 --- 行分隔", padding=12).pack(anchor="w")
-        text = tk.Text(dialog, background=PANEL, foreground=INK, insertbackground=INK,
-                       font=("Consolas", 13), undo=True, wrap="none", padx=12, pady=12)
+        dialog.columnconfigure(0, weight=1)
+        dialog.rowconfigure(2, weight=1)
+        pad, gap = round(18 * self.scale), round(10 * self.scale)
+        ttk.Label(dialog, text="文本图案", font=("Microsoft YaHei UI", 13, "bold")).grid(
+            row=0, column=0, columnspan=3, sticky="w", padx=pad, pady=(pad, gap // 2))
+        ttk.Label(dialog, text="# 亮格 · . 空白 · 独立的 --- 行分帧", style="Muted.TLabel").grid(
+            row=1, column=0, columnspan=3, sticky="w", padx=pad, pady=(0, gap))
+        text = tk.Text(dialog, background=FIELD, foreground=INK, insertbackground=INK,
+                       selectbackground="#57364d", selectforeground=INK,
+                       font=("Consolas", 13), undo=True, wrap="none", borderwidth=0,
+                       highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT,
+                       padx=gap, pady=gap)
         text.insert("1.0", self._text())
+        text.grid(row=2, column=0, columnspan=2, sticky="nsew", padx=(pad, 0))
+        scrollbar = ttk.Scrollbar(dialog, command=text.yview)
+        scrollbar.grid(row=2, column=2, sticky="ns", padx=(0, pad))
+        text.configure(yscrollcommand=scrollbar.set)
 
         def apply():
             try:
@@ -898,8 +921,11 @@ class PaintApp:
                 return
             dialog.destroy()
 
-        ttk.Button(dialog, text="应用到画布", command=apply, style="Accent.TButton").pack(side="bottom", anchor="e", padx=12, pady=12)
-        text.pack(fill="both", expand=True, padx=12)
+        ttk.Button(dialog, text="应用到画布", command=apply, style="Accent.TButton").grid(
+            row=3, column=1, columnspan=2, sticky="e", padx=pad, pady=gap)
+        ttk.Button(dialog, text="取消", command=dialog.destroy).grid(
+            row=3, column=0, sticky="w", padx=pad, pady=gap)
+        dialog.bind("<Escape>", lambda event: dialog.destroy())
         text.focus_set()
 
     def _stop(self):

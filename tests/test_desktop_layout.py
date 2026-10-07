@@ -99,3 +99,28 @@ class DesktopLayoutTests(unittest.TestCase):
                        self.app.video_cancel_button, self.app.video_preview_button):
             self.assert_fits(widget, dialog)
         self.app.video_cancel_button.invoke()
+
+    def test_text_dialog_has_scrollbar_cancel_and_a_safe_minimum_size(self):
+        before = self.app._project_data()
+        self.root.deiconify()
+        self.app.edit_text()
+        self.root.update()
+        dialog = next(child for child in self.root.winfo_children() if isinstance(child, tk.Toplevel))
+        minimum = dialog.minsize()
+        self.assertGreaterEqual(minimum[0], round(420 * self.app.scale))
+        self.assertGreaterEqual(minimum[1], round(320 * self.app.scale))
+        dialog.geometry(f"{minimum[0]}x{minimum[1]}")
+        self.root.update()
+        children = dialog.winfo_children()
+        editor = next(child for child in children if isinstance(child, tk.Text))
+        scroll = next(child for child in children if isinstance(child, ttk.Scrollbar))
+        editor.insert('end', '\n'.join(['#.'] * 500))
+        self.root.update_idletasks()
+        self.root.tk.call(scroll['command'], 'moveto', .9)
+        self.assertGreater(editor.yview()[0], .8)
+        buttons = [child for child in children if isinstance(child, ttk.Button)]
+        for button in buttons:
+            self.assert_fits(button, dialog)
+        next(button for button in buttons if button['text'] == '取消').invoke()
+        self.assertFalse(dialog.winfo_exists())
+        self.assertEqual(self.app._project_data(), before)
