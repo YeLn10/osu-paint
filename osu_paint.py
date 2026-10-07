@@ -327,6 +327,38 @@ def _compile_lazer_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, t
             if sum(loads[i] for i in new_groups) <= 1.1 * old_load:
                 note_frames, anchors, reference_beat = candidate, candidate_anchors, candidate_reference
                 best_time = candidate_time
+        # Greedy reuse leaves short final groups (e.g. 29+29+2 frames).
+        # Balance the SAME number of groups by time within each identical run:
+        # a shorter longest plateau can raise the reference without extra notes.
+        balanced = note_frames.copy()
+        starts = [start for start, _ in frame_times]
+        first = 0
+        while first < len(frames):
+            stop = first + 1
+            while (stop < len(frames) and frames[stop] == frames[first] and
+                   frame_times[stop][0] - frame_times[stop - 1][1] <= 2 * transition_ms + 1e-7):
+                stop += 1
+            count = sum(note_frames[i] == i for i in range(first, stop))
+            if count > 1 and has_notes[first]:
+                until = frame_times[stop - 1][1]
+                if stop < len(frames) and frame_times[stop][0] - until <= 2 * transition_ms + 1e-7:
+                    until = frame_times[stop][0]
+                group_start = first
+                for part in range(1, count):
+                    target = starts[first] + (until - starts[first]) * part / count
+                    low, high = group_start + 1, stop - (count - part)
+                    insertion = bisect_right(starts, target, low, high + 1)
+                    split = min((max(low, insertion - 1), min(high, insertion)),
+                                key=lambda i: abs(starts[i] - target))
+                    balanced[group_start:split] = [group_start] * (split - group_start)
+                    group_start = split
+                balanced[group_start:stop] = [group_start] * (stop - group_start)
+            first = stop
+        if balanced != note_frames:
+            balanced_anchors = [initial_anchors[i] if i == group else 0 for i, group in enumerate(balanced)]
+            balanced_reference = reference_for(balanced, balanced_anchors)
+            if internal_sweep_time(balanced, balanced_reference) < .8 * internal_sweep_time(note_frames, reference_beat):
+                note_frames, anchors, reference_beat = balanced, balanced_anchors, balanced_reference
         counts = [math.ceil((end - start - anchor) / 50)
                   for (start, end), anchor in zip(frame_times, anchors)]
     sweep_ms = transition_ms * 500 / reference_beat
