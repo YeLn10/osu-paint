@@ -140,7 +140,7 @@ class DesktopClientTests(unittest.TestCase):
     def test_automatic_transition_field_shows_actual_result_without_losing_manual_value(self):
         self.app.fields["transition_ms"].set("12")
         self.app._refresh_preview()
-        self.assertAlmostEqual(float(self.app.entries["transition_ms"].get()), self.app.plan["sweep_ms"], places=6)
+        self.assertEqual(self.app.entries["transition_ms"].get(), f"{self.app.plan['sweep_ms']:.3f}")
         self.assertEqual(self.app.fields["transition_ms"].get(), "12")
         self.app.fast_clear.set(False)
         self.app._timing_options_changed()
@@ -150,7 +150,7 @@ class DesktopClientTests(unittest.TestCase):
         self.app.fast_clear.set(True)
         self.app._timing_options_changed()
         self.app._refresh_preview()
-        self.assertAlmostEqual(float(self.app.entries["transition_ms"].get()), self.app.plan["sweep_ms"], places=6)
+        self.assertEqual(self.app.entries["transition_ms"].get(), f"{self.app.plan['sweep_ms']:.3f}")
 
     def test_free_mode_entry_edits_change_real_sweep_and_keep_frame_times(self):
         project = self.app._project_data()
@@ -175,11 +175,13 @@ class DesktopClientTests(unittest.TestCase):
         self.assertEqual(self.app.video_fields["height"].get(), "24")
         self.app.video_cancel_button.invoke()
 
-    def test_refresh_rate_white_input_has_black_text(self):
+    def test_refresh_rate_uses_same_readable_colours_as_other_inputs(self):
         self.open_video_dialog()
         entry = next(widget for widget in self.app.video_inputs if isinstance(widget, ttk.Spinbox))
         style = ttk.Style(self.root)
         colour = entry.cget("foreground") or style.lookup(entry.cget("style") or entry.winfo_class(), "foreground")
-        self.assertEqual(self.root.winfo_rgb(colour), (0, 0, 0))
+        self.assertEqual(colour, style.lookup("TEntry", "foreground"))
+        self.assertEqual(style.lookup("TSpinbox", "fieldbackground"), style.lookup("TEntry", "fieldbackground"))
+        self.assertNotEqual(colour, style.lookup("TSpinbox", "fieldbackground"))
         self.assertEqual(entry.get(), "60")
         self.app.video_cancel_button.invoke()

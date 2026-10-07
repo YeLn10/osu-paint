@@ -22,12 +22,14 @@ from osu_paint_skin import DEFAULT_ASPECT_RATIO, SKIN_PROFILES, skin_filename
 
 HEART = [".##.##.", "#######", "#######", ".#####.", "..###..", "...#..."]
 OUTPUT_FILES = ("pattern.osz", "pattern.osu", "silence.wav", "preview.html", "report.json", *SKIN_PROFILES)
-BG = "#101522"
-PANEL = "#192131"
+BG = "#10131c"
+PANEL = "#191f2c"
 INK = "#edf1fa"
-MUTED = "#a0aec3"
-ACCENT = "#ef76a7"
+MUTED = "#a2aec2"
+ACCENT = "#f182ad"
 MINT = "#70dfcc"
+BORDER = "#30394b"
+FIELD = "#111722"
 
 
 class PaintApp:
@@ -73,155 +75,201 @@ class PaintApp:
     def _style(self):
         style = ttk.Style(self.root)
         style.theme_use("clam")
+        gap = round(6 * self.scale)
         style.configure(".", font=("Microsoft YaHei UI", 10), background=BG,
-                        foreground=INK, bordercolor=PANEL)
+                        foreground=INK, bordercolor=BORDER)
         style.configure("TFrame", background=BG)
         style.configure("Panel.TFrame", background=PANEL)
         style.configure("TLabel", background=BG)
         style.configure("Muted.TLabel", foreground=MUTED)
-        style.configure("Title.TLabel", font=("Segoe UI", 25, "bold"))
-        style.configure("Heading.TLabel", font=("Microsoft YaHei UI", 12, "bold"))
-        style.configure("TButton", background="#29354a", padding=(12, 7), borderwidth=0)
-        style.map("TButton", background=[("active", "#394962")],
-                  foreground=[("disabled", "#68778e")])
-        style.configure("Accent.TButton", background=ACCENT, foreground=BG)
-        style.map("Accent.TButton", background=[("active", "#ff9cc4"), ("disabled", PANEL)])
-        style.configure("TEntry", fieldbackground=PANEL, insertcolor=INK, padding=7)
-        style.configure("TCombobox", fieldbackground=PANEL, padding=5)
-        style.map("TCombobox", fieldbackground=[("readonly", PANEL)], foreground=[("readonly", INK)])
-        style.configure("Horizontal.TScale", background=BG, troughcolor=PANEL)
+        style.configure("Title.TLabel", font=("Segoe UI", 23, "bold"))
+        style.configure("Panel.TLabel", background=PANEL)
+        style.configure("PanelMuted.TLabel", background=PANEL, foreground=MUTED,
+                        font=("Microsoft YaHei UI", 9))
+        style.configure("Heading.TLabel", background=PANEL, font=("Microsoft YaHei UI", 11, "bold"))
+        style.configure("TButton", background="#2a3447", padding=(gap * 2, gap),
+                        borderwidth=0, focusthickness=1, focuscolor=MUTED)
+        style.map("TButton", background=[("disabled", PANEL), ("active", "#3b4861")],
+                  foreground=[("disabled", "#748198")])
+        style.configure("Quiet.TButton", background=PANEL, foreground=MUTED)
+        style.configure("Accent.TButton", background=ACCENT, foreground=BG, focuscolor=BG)
+        style.map("Accent.TButton", background=[("disabled", PANEL), ("active", "#ffa4c7")])
+        for name in ("TEntry", "TCombobox", "TSpinbox"):
+            style.configure(name, fieldbackground=FIELD, foreground=INK, insertcolor=INK,
+                            padding=gap, borderwidth=1, arrowsize=round(12 * self.scale),
+                            arrowcolor=MUTED, lightcolor=BORDER, darkcolor=BORDER)
+            style.map(name, fieldbackground=[("disabled", PANEL), ("readonly", FIELD)],
+                      foreground=[("disabled", MUTED), ("readonly", INK)],
+                      bordercolor=[("focus", ACCENT)])
+        style.configure("TCheckbutton", background=PANEL, padding=(0, gap // 2),
+                        indicatorbackground=FIELD, indicatorforeground=BG,
+                        indicatorsize=round(14 * self.scale), indicatormargin=(0, 0, gap, 0))
+        style.map("TCheckbutton", background=[("active", PANEL)],
+                  foreground=[("disabled", MUTED)],
+                  indicatorbackground=[("selected", ACCENT), ("active", BORDER)])
+        style.configure("Horizontal.TScale", background=MINT, troughcolor=FIELD,
+                        sliderlength=round(14 * self.scale), arrowsize=round(12 * self.scale),
+                        gripcount=0, borderwidth=0, lightcolor=MINT, darkcolor=MINT)
+        style.configure("Vertical.TScrollbar", background=BORDER, troughcolor=PANEL,
+                        arrowcolor=MUTED, borderwidth=0, arrowsize=round(10 * self.scale))
+        self.root.option_add("*TCombobox*Listbox.background", FIELD)
+        self.root.option_add("*TCombobox*Listbox.foreground", INK)
+        self.root.option_add("*TCombobox*Listbox.selectBackground", "#57364d")
+        self.root.option_add("*TCombobox*Listbox.selectForeground", INK)
 
     def _build(self):
-        header = ttk.Frame(self.root, padding=(24, 16, 24, 12))
+        pad, gap = round(18 * self.scale), round(10 * self.scale)
+        header = ttk.Frame(self.root, padding=(pad, gap, pad, gap))
         header.pack(fill="x")
         ttk.Label(header, text="osu!paint", style="Title.TLabel").pack(side="left")
-        ttk.Label(header, text="  /  MANIA SV STUDIO", style="Muted.TLabel").pack(side="left", pady=(9, 0))
-        for label, command in [("保存项目", self.save_pattern), ("打开", self.open_pattern),
-                               ("编辑文本", self.edit_text), ("导入视频", self.import_video)]:
-            ttk.Button(header, text=label, command=command).pack(side="right", padx=(8, 0))
+        client_panel = ttk.Frame(header)
+        client_panel.pack(side="left", padx=pad)
+        ttk.Label(client_panel, text="目标", style="Muted.TLabel").pack(side="left", padx=(0, gap))
+        self.client_choice = ttk.Combobox(client_panel, textvariable=self.target_client,
+                                         values=CLIENTS, state="readonly", width=7)
+        self.client_choice.pack(side="left")
+        self.client_display = ttk.Label(client_panel, textvariable=self.target_client)
+        self.target_client.trace_add("write", self._client_changed)
+        for label, command in [("导入视频", self.import_video), ("保存项目", self.save_pattern),
+                               ("打开项目", self.open_pattern)]:
+            ttk.Button(header, text=label, command=command).pack(side="right", padx=(gap, 0))
 
-        body = ttk.Frame(self.root, padding=(24, 0, 24, 0))
+        body = ttk.Frame(self.root, padding=(pad, 0, pad, 0))
         body.pack(fill="both", expand=True)
-        body.columnconfigure(0, weight=3, uniform="columns")
-        body.columnconfigure(1, weight=2, uniform="columns")
+        body.columnconfigure(0, weight=6, uniform="columns")
+        body.columnconfigure(1, weight=5, uniform="columns")
         body.rowconfigure(0, weight=1)
-        left = ttk.Frame(body, padding=(0, 0, 24, 0))
-        left.grid(row=0, column=0, sticky="nsew")
+        left = ttk.Frame(body, style="Panel.TFrame", padding=gap)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, gap))
         left.columnconfigure(0, weight=1)
         left.rowconfigure(2, weight=1)
-        tools = ttk.Frame(left)
-        tools.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        tools = ttk.Frame(left, style="Panel.TFrame")
+        tools.grid(row=0, column=0, sticky="ew")
         ttk.Label(tools, text="像素画布", style="Heading.TLabel").pack(side="left")
-        ttk.Button(tools, text="新建", command=self.new_pattern).pack(side="right")
+        ttk.Button(tools, text="新建", style="Quiet.TButton", command=self.new_pattern).pack(side="right")
+        ttk.Button(tools, text="编辑文本", style="Quiet.TButton", command=self.edit_text).pack(side="right")
         self.editor_info = tk.StringVar()
-        ttk.Label(left, textvariable=self.editor_info, style="Muted.TLabel").grid(row=1, column=0, sticky="w", pady=(0, 8))
-        self.canvas = tk.Canvas(left, background=PANEL, highlightthickness=0, height=240)
+        ttk.Label(left, textvariable=self.editor_info, style="PanelMuted.TLabel").grid(
+            row=1, column=0, sticky="w", pady=(0, gap))
+        self.canvas = tk.Canvas(left, background=PANEL, highlightthickness=0, height=round(240 * self.scale))
         self.canvas.grid(row=2, column=0, sticky="nsew")
         self.canvas.bind("<Configure>", lambda event: self._draw_grid())
         self.canvas.bind("<Button-1>", self._begin_stroke)
         self.canvas.bind("<B1-Motion>", self._paint)
         self.canvas.bind("<Button-3>", self._begin_stroke)
         self.canvas.bind("<B3-Motion>", self._paint)
-        ttk.Label(left, text="左键点按 / 拖动绘制，右键擦除 · 每列对应一个按键列", style="Muted.TLabel").grid(row=3, column=0, sticky="w", pady=(8, 12))
-
-        frame_bar = ttk.Frame(left)
-        frame_bar.grid(row=4, column=0, sticky="ew", pady=(0, 6))
+        ttk.Label(left, text="左键绘制 · 右键擦除", style="PanelMuted.TLabel").grid(
+            row=3, column=0, sticky="w", pady=(gap, gap))
+        frame_bar = ttk.Frame(left, style="Panel.TFrame")
+        frame_bar.grid(row=4, column=0, sticky="ew", pady=(0, gap // 2))
         ttk.Label(frame_bar, text="动画帧", style="Heading.TLabel").pack(side="left")
-        self.delete_button = ttk.Button(frame_bar, text="删除", command=self.delete_frame)
+        self.delete_button = ttk.Button(frame_bar, text="删除", style="Quiet.TButton", command=self.delete_frame)
         self.delete_button.pack(side="right")
-        ttk.Button(frame_bar, text="复制", command=lambda: self.add_frame(True)).pack(side="right", padx=6)
-        ttk.Button(frame_bar, text="＋ 空白帧", command=self.add_frame).pack(side="right")
-        frame_box = ttk.Frame(left)
+        ttk.Button(frame_bar, text="复制", style="Quiet.TButton",
+                   command=lambda: self.add_frame(True)).pack(side="right")
+        ttk.Button(frame_bar, text="＋ 空白帧", style="Quiet.TButton", command=self.add_frame).pack(side="right")
+        frame_box = ttk.Frame(left, style="Panel.TFrame")
         frame_box.grid(row=5, column=0, sticky="ew")
-        self.frame_list = tk.Listbox(frame_box, height=3, background=PANEL, foreground=INK,
-                                    selectbackground="#593750", selectforeground=INK,
+        self.frame_list = tk.Listbox(frame_box, height=4, background=FIELD, foreground=INK,
+                                    selectbackground="#57364d", selectforeground=INK,
                                     font=("Microsoft YaHei UI", 10), borderwidth=0,
-                                    highlightthickness=0, exportselection=False)
+                                    highlightthickness=1, highlightbackground=BORDER,
+                                    highlightcolor=ACCENT, exportselection=False, activestyle="none")
         self.frame_list.pack(side="left", fill="both", expand=True)
         scrollbar = ttk.Scrollbar(frame_box, command=self.frame_list.yview)
         scrollbar.pack(side="right", fill="y")
         self.frame_list.configure(yscrollcommand=scrollbar.set)
         self.frame_list.bind("<<ListboxSelect>>", self.select_frame)
 
-        timing_bar = ttk.Frame(left)
-        timing_bar.grid(row=6, column=0, sticky="ew", pady=(12, 6))
+        right = ttk.Frame(body)
+        right.grid(row=0, column=1, sticky="nsew")
+        right.columnconfigure(0, weight=1)
+        right.rowconfigure(0, weight=1)
+        preview_panel = ttk.Frame(right, style="Panel.TFrame", padding=gap)
+        preview_panel.grid(row=0, column=0, sticky="nsew", pady=(0, gap))
+        preview_panel.columnconfigure(0, weight=1)
+        preview_panel.rowconfigure(1, weight=1)
+        preview_bar = ttk.Frame(preview_panel, style="Panel.TFrame")
+        preview_bar.grid(row=0, column=0, sticky="ew")
+        ttk.Label(preview_bar, text="舞台预览", style="Heading.TLabel").pack(side="left")
+        ttk.Label(preview_bar, text="位置模拟 · 非实机", style="PanelMuted.TLabel").pack(side="right")
+        self.preview = tk.Canvas(preview_panel, background=PANEL, highlightthickness=0,
+                                 width=round(300 * self.scale), height=round(150 * self.scale))
+        self.preview.grid(row=1, column=0, sticky="nsew")
+        self.preview.bind("<Configure>", lambda event: self._draw_preview())
+        self.seek_time = tk.DoubleVar(value=2000)
+        self.seek = ttk.Scale(preview_panel, variable=self.seek_time, command=self._seek_changed)
+        self.seek.grid(row=2, column=0, sticky="ew", pady=(gap // 2, gap // 2))
+        playback = ttk.Frame(preview_panel, style="Panel.TFrame")
+        playback.grid(row=3, column=0, sticky="ew")
+        self.play_button = ttk.Button(playback, text="▶ 播放", command=self.toggle_play, width=6)
+        self.play_button.pack(side="left")
+        ttk.Button(playback, text="定位", style="Quiet.TButton", command=self.seek_selected, width=4).pack(
+            side="left", padx=(gap // 2, 0))
+        self.time_label = tk.StringVar()
+        ttk.Label(playback, textvariable=self.time_label, style="PanelMuted.TLabel").pack(side="right")
+
+        settings_panel = ttk.Frame(right, style="Panel.TFrame", padding=gap)
+        settings_panel.grid(row=1, column=0, sticky="ew")
+        settings_panel.columnconfigure(0, weight=1)
+        timing_bar = ttk.Frame(settings_panel, style="Panel.TFrame")
+        timing_bar.grid(row=0, column=0, sticky="ew", pady=(0, gap))
+        ttk.Label(timing_bar, text="时间与滚速", style="Heading.TLabel").pack(side="left")
+        ttk.Button(timing_bar, text="说明", style="Quiet.TButton", command=self.explain_timing, width=4).pack(side="right")
         self.timing_mode = tk.StringVar(value="均分模式")
         ttk.Combobox(timing_bar, textvariable=self.timing_mode, values=("均分模式", "自由模式"),
-                     state="readonly", width=9).pack(side="left")
-        client_panel = ttk.Frame(timing_bar)
-        client_panel.pack(side="left", padx=(8, 4))
-        ttk.Label(client_panel, text="客户端 ").pack(side="left")
-        self.client_choice = ttk.Combobox(client_panel, textvariable=self.target_client,
-                                         values=CLIENTS, state="readonly", width=7)
-        self.client_choice.pack(side="left")
-        self.client_display = ttk.Label(client_panel, textvariable=self.target_client)
-        self.target_client.trace_add("write", self._client_changed)
-        self.fast_clear = tk.BooleanVar(value=True)
-        ttk.Checkbutton(timing_bar, text="极速清场", variable=self.fast_clear,
-                        command=lambda: (self._clear_video_alignment(), self._timing_options_changed())).pack(side="left", padx=8)
-        ttk.Button(timing_bar, text="参数说明", command=self.explain_timing).pack(side="right")
-        settings = ttk.Frame(left)
-        settings.grid(row=7, column=0, sticky="ew")
+                     state="readonly", width=8).pack(side="right", padx=gap)
+        settings = ttk.Frame(settings_panel, style="Panel.TFrame")
+        settings.grid(row=1, column=0, sticky="ew")
         self.fields = {}
         self.time_labels = []
         self.entries = {}
         for i, (key, label, value) in enumerate([
-                ("start_ms", "展示开始 / ms", "2000"), ("end_ms", "展示结束 / ms", "4000"),
-                ("transition_ms", "切帧时长 / ms", "12"), ("scroll_speed", "游戏滚速 / 1–40", "27")]):
-            settings.columnconfigure(i, weight=1, uniform="fields")
-            field_label = ttk.Label(settings, text=label, style="Muted.TLabel")
-            field_label.grid(row=0, column=i, sticky="w", padx=(0, 8))
+                ("start_ms", "开始 / ms", "2000"), ("end_ms", "结束 / ms", "4000"),
+                ("transition_ms", "切帧 / ms", "12"), ("scroll_speed", "游戏滚速 · 1–40", "27")]):
+            row, col = divmod(i, 2)
+            settings.columnconfigure(col, weight=1, uniform="fields")
+            field_label = ttk.Label(settings, text=label, style="PanelMuted.TLabel")
+            field_label.grid(row=row * 2, column=col, sticky="w", padx=(0, gap), pady=(0 if row == 0 else gap, 0))
             self.time_labels.append(field_label)
             variable = tk.StringVar(value=value)
             self.fields[key] = variable
             entry = ttk.Entry(settings, textvariable=variable, width=9)
-            entry.grid(row=1, column=i, sticky="ew", padx=(0, 8), pady=(6, 0))
+            entry.grid(row=row * 2 + 1, column=col, sticky="ew", padx=(0, gap if col == 0 else 0))
             self.entries[key] = entry
             variable.trace_add("write", lambda *args, field=key: self._parameter_changed(field))
         self.automatic_transition = tk.StringVar(value="自动")
         self.entries["transition_ms"].configure(state="disabled")
         self.timing_mode.trace_add("write", self._mode_changed)
+        options = ttk.Frame(settings_panel, style="Panel.TFrame")
+        options.grid(row=2, column=0, sticky="ew", pady=(gap // 2, 0))
+        self.fast_clear = tk.BooleanVar(value=True)
+        ttk.Checkbutton(options, text="极速清场", variable=self.fast_clear,
+                        command=lambda: (self._clear_video_alignment(), self._timing_options_changed())).pack(side="left")
         self.merge_holds = tk.BooleanVar(value=True)
-        ttk.Checkbutton(left, text="连续单键转长条（同列相邻亮格，不跨空格 / 帧）", variable=self.merge_holds,
-                        command=self._changed).grid(row=8, column=0, sticky="w", pady=(8, 0))
-
-        right = ttk.Frame(body)
-        right.grid(row=0, column=1, sticky="nsew")
-        right.columnconfigure(0, weight=1)
-        right.rowconfigure(2, weight=1)
-        ttk.Label(right, text="舞台预览", style="Heading.TLabel").grid(row=0, column=0, sticky="w", pady=(8, 6))
-        ttk.Label(right, text="位置模拟 · 非游戏实机画面", style="Muted.TLabel").grid(row=1, column=0, sticky="w", pady=(0, 8))
-        self.preview = tk.Canvas(right, background="#0b101b", highlightthickness=0, width=300, height=360)
-        self.preview.grid(row=2, column=0, sticky="nsew")
-        self.preview.bind("<Configure>", lambda event: self._draw_preview())
-        self.seek_time = tk.DoubleVar(value=2000)
-        self.seek = ttk.Scale(right, variable=self.seek_time, command=self._seek_changed)
-        self.seek.grid(row=3, column=0, sticky="ew", pady=(10, 6))
-        playback = ttk.Frame(right)
-        playback.grid(row=4, column=0, sticky="ew")
-        self.play_button = ttk.Button(playback, text="▶ 播放", command=self.toggle_play)
-        self.play_button.pack(side="left")
-        ttk.Button(playback, text="回到当前帧", command=self.seek_selected).pack(side="left", padx=8)
-        self.time_label = tk.StringVar()
-        ttk.Label(right, textvariable=self.time_label, style="Muted.TLabel").grid(row=5, column=0, sticky="w", pady=(8, 4))
+        ttk.Checkbutton(options, text="合并长条", variable=self.merge_holds,
+                        command=self._changed).pack(side="left", padx=pad)
         self.playback_hint = tk.StringVar()
-        ttk.Label(right, textvariable=self.playback_hint,
-                  style="Muted.TLabel", font=("Microsoft YaHei UI", 9)).grid(row=6, column=0, sticky="w", pady=(6, 0))
+        hint = ttk.Label(settings_panel, textvariable=self.playback_hint, style="PanelMuted.TLabel")
+        hint.grid(row=3, column=0, sticky="ew", pady=(gap // 2, 0))
+        settings_panel.bind("<Configure>", lambda event: hint.configure(wraplength=max(1, event.width - 2 * gap)))
 
-        footer = ttk.Frame(self.root, padding=(24, 18, 24, 16))
+        footer = ttk.Frame(self.root, padding=(pad, gap, pad, gap))
         footer.pack(fill="x")
-        ttk.Label(footer, text="导出目录", style="Muted.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 6))
-        footer.columnconfigure(0, weight=1)
+        footer.columnconfigure(1, weight=1)
+        ttk.Label(footer, text="导出到", style="Muted.TLabel").grid(row=0, column=0, padx=(0, gap))
         self.output_dir = tk.StringVar(value=str(Path.home() / "osu-paint-output"))
-        ttk.Entry(footer, textvariable=self.output_dir).grid(row=1, column=0, sticky="ew")
-        ttk.Button(footer, text="浏览…", command=self.choose_output).grid(row=1, column=1, padx=8)
+        ttk.Entry(footer, textvariable=self.output_dir).grid(row=0, column=1, sticky="ew")
+        ttk.Button(footer, text="选择目录", command=self.choose_output).grid(row=0, column=2, padx=gap)
         self.folder_button = ttk.Button(footer, text="打开结果", command=self.open_output, state="disabled")
-        self.folder_button.grid(row=1, column=2, padx=(0, 8))
+        self.folder_button.grid(row=0, column=3, padx=(0, gap))
         self.export_button = ttk.Button(footer, text="导出 .osz  →", style="Accent.TButton", command=self.export)
-        self.export_button.grid(row=1, column=3)
+        self.export_button.grid(row=0, column=4)
         self.status = tk.StringVar()
-        self.status_label = ttk.Label(footer, textvariable=self.status, style="Muted.TLabel", wraplength=round(1040 * self.scale))
-        self.status_label.grid(row=2, column=0, columnspan=4, sticky="w", pady=(10, 0))
+        self.status_label = ttk.Label(footer, textvariable=self.status, style="Muted.TLabel",
+                                      font=("Microsoft YaHei UI", 9))
+        self.status_label.grid(row=1, column=0, columnspan=5, sticky="ew", pady=(gap // 2, 0))
+        footer.bind("<Configure>", lambda event: self.status_label.configure(wraplength=max(1, event.width - 2 * pad)))
 
     def _show_time_fields(self):
         free = self.timing_mode.get() == "自由模式"
@@ -230,7 +278,7 @@ class PaintApp:
         for i, key in enumerate(("start_ms", "end_ms")):
             self.fields[key].set(values[i])
             self.time_labels[i].configure(text=("本帧开始 / ms", "本帧结束 / ms")[i] if free
-                                          else ("展示开始 / ms", "展示结束 / ms")[i])
+                                          else ("开始 / ms", "结束 / ms")[i])
         self.syncing_fields = False
 
     def _parameter_changed(self, key):
@@ -281,20 +329,23 @@ class PaintApp:
         self._changed()
 
     def explain_timing(self):
-        messagebox.showinfo("时间与滚速说明",
-                            "均分模式：所有帧平分总时间，先扣除切帧时间。\n"
-                            "自由模式：选中一帧，填写本帧开始、结束时间。允许留空档，不能重叠；间隔须足够切帧。\n\n"
-                            "切帧时长：关闭极速清场后，手动值决定实际推进时长；短空档的剩余时间延长静置，远离的两帧分别退场、进场。\n"
-                            "极速清场：输入框显示自动计算的实际时长，手动值暂不生效；关闭后恢复原手动值。两端时间规则不同，不能保证零过渡画面。\n\n"
-                            "视频导入窗口选择 stable 或 lazer；导入后编辑区只显示项目目标。手绘项目可在编辑区选择。相同画面会在漂移预算内复用音符。\n"
-                            "刷新率排帧：填写实际 Hz（支持 59.94、60000/1001），按整次刷新安排采样，避免取整时钟的长期错位。\n"
-                            "视频按填写的屏幕刷新率自动安排换帧，音轨保持原开始时间。\n"
-                            "连续单键转长条：同一帧同列的连续亮格合并，不跨空格；头、身体、尾均使用不透明纯黑贴图。\n\n"
-                            "游戏滚速：必须与游戏设置一致。它决定时间距离如何换算成舞台位置，不是动画帧率；"
-                            "更改后会重新计算音符与变速点，不会改变你填写的展示时间。\n\n"
-                            "导出后请导入同目录中匹配屏幕比例的 pixel-film*.osk；默认 16:10，黑块高度匹配画布行数。\n"
-                            "lazer 的 >10K 仍会拆分；stable 合并舞台但每列最多 100，低键数较窄。\n\n"
-                            "保存为 JSON 项目可保留全部时间与参数；TXT 仅保存图案。",
+        details = ""
+        if self.plan is not None:
+            details = (f"\n\n当前：{self.plan['target_client']} · {len(self.plan['notes'])} 音符 · "
+                       f"切帧 {self.plan['sweep_ms']:.3f} ms\n"
+                       f"预计最大单帧漂移 {self.plan['drift_at_768px']:.4f} px（内部高度 768 px）")
+        messagebox.showinfo("参数说明",
+                            "均分：所有帧平分总时间，扣除切帧时长。\n"
+                            "自由：逐帧设定起止时间；可留空档，不能重叠。\n"
+                            "极速清场：自动计算切帧时长；关闭后可手动填写。\n"
+                            "合并长条：仅合并同帧、同列的相邻亮格，不跨空格。\n\n"
+                            "游戏滚速须与这里一致；stable 使用固定滚速。\n"
+                            "视频按实际刷新率排帧，音轨不随排帧调整移动。\n"
+                            "换视频客户端须重新导入；保存 JSON 可保留时间与音轨，TXT 仅保存图案。\n\n"
+                            "导出后分别导入 .osz 和匹配屏幕比例的 pixel-film*.osk，默认 16:10。\n"
+                            "lazer >10K 强制双舞台，11/13/15/17K 少一列，皮肤无法解除。\n"
+                            "stable 合并 1–18K，但每列最多 100，低键数较窄。\n"
+                            "预览仅模拟位置；刷新率排帧不能保证实机零残影。" + details,
                             parent=self.root)
 
     def _status(self, text, error=False):
@@ -309,7 +360,7 @@ class PaintApp:
         for i, frame in enumerate(self.frames):
             timing = f"  ·  {self.frame_times[i][0]}–{self.frame_times[i][1]} ms" if self.timing_mode.get() == "自由模式" else ""
             count = sum(row.count('#') for row in frame)
-            items.append(f"  {i + 1:02d}    {'●' if i == self.selected else '○'}    {count} 个音符{timing}")
+            items.append(f"  {i + 1:02d}    {'●' if i == self.selected else '○'}    {count} 亮格{timing}")
         self.frame_list.insert("end", *items)
         self.frame_list.selection_set(self.selected)
         self.frame_list.see(self.selected)
@@ -574,72 +625,96 @@ class PaintApp:
         if not filename:
             return
         dialog = self.import_dialog = tk.Toplevel(self.root)
-        dialog.title("视频 → 音符动画 + 音乐")
+        dialog.title("导入视频")
         dialog.configure(background=BG)
         dialog.transient(self.root)
         dialog.grab_set()
-        panel = ttk.Frame(dialog, padding=20)
-        panel.pack(side="left", fill="both", expand=True)
-        preview_panel = ttk.Frame(dialog, padding=(0, 20, 20, 20))
+        pad, gap = round(18 * self.scale), round(10 * self.scale)
+        heading = ttk.Frame(dialog, padding=(pad, gap, pad, gap))
+        heading.pack(fill="x")
+        ttk.Label(heading, text="导入视频", font=("Microsoft YaHei UI", 13, "bold")).pack(side="left")
+        ttk.Label(heading, text=Path(filename).name, style="Muted.TLabel",
+                  wraplength=round(560 * self.scale)).pack(side="left", padx=pad)
+        body = ttk.Frame(dialog, padding=(pad, 0, pad, 0))
+        body.pack(fill="both", expand=True)
+        panel = ttk.Frame(body, style="Panel.TFrame", padding=gap)
+        panel.pack(side="left", fill="both", expand=True, padx=(0, gap))
+        for col in (0, 1):
+            panel.columnconfigure(col, weight=1, uniform="video-fields")
+        preview_panel = ttk.Frame(body, style="Panel.TFrame", padding=gap)
         preview_panel.pack(side="right", fill="both")
-        ttk.Label(preview_panel, text="所选帧原画面", style="Heading.TLabel").pack(anchor="w")
-        self.video_source_canvas = tk.Canvas(preview_panel, width=320, height=180, background="#000", highlightthickness=0)
-        self.video_source_canvas.pack(pady=(8, 12))
-        self.video_preview_label = tk.StringVar(value="填写帧序号后点击预览；参数修改后需刷新。")
-        ttk.Label(preview_panel, textvariable=self.video_preview_label, wraplength=320, style="Muted.TLabel").pack(anchor="w")
-        self.video_result_canvas = tk.Canvas(preview_panel, width=320, height=180, background="#000", highlightthickness=0)
-        self.video_result_canvas.pack(pady=8)
+        ttk.Label(preview_panel, text="原画面", style="Heading.TLabel").pack(anchor="w")
+        self.video_source_canvas = tk.Canvas(preview_panel, width=round(320 * self.scale),
+                                             height=round(180 * self.scale), background="#000", highlightthickness=0)
+        self.video_source_canvas.pack(pady=(gap // 2, gap))
+        ttk.Label(preview_panel, text="像素结果", style="Heading.TLabel").pack(anchor="w")
+        self.video_result_canvas = tk.Canvas(preview_panel, width=round(320 * self.scale),
+                                             height=round(180 * self.scale), background="#fff", highlightthickness=0)
+        self.video_result_canvas.pack(pady=(gap // 2, gap))
         self.video_preview_result = None
-        ttk.Label(panel, text=Path(filename).name, style="Heading.TLabel", wraplength=480).grid(
-            row=0, column=0, columnspan=2, sticky="w", pady=(0, 14))
+        self.video_preview_label = tk.StringVar(value="选择帧后预览")
+        ttk.Label(preview_panel, textvariable=self.video_preview_label, wraplength=round(320 * self.scale),
+                  style="PanelMuted.TLabel").pack(anchor="w", pady=(0, gap // 2))
+        preview_controls = ttk.Frame(preview_panel, style="Panel.TFrame")
+        preview_controls.pack(fill="x")
+        ttk.Label(preview_controls, text="预览帧", style="PanelMuted.TLabel").pack(side="left", padx=(0, gap))
+        self.video_frame_index = tk.StringVar(value="1")
+        frame_entry = ttk.Entry(preview_controls, textvariable=self.video_frame_index, width=6)
+        frame_entry.pack(side="left")
+
+        ttk.Label(panel, text="采样设置", style="Heading.TLabel").grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, gap))
         self.video_target_client = tk.StringVar(value=self.target_client.get())
-        ttk.Label(panel, text="目标客户端", style="Muted.TLabel").grid(row=1, column=0, sticky="w")
+        ttk.Label(panel, text="客户端", style="PanelMuted.TLabel").grid(row=1, column=0, sticky="w")
         self.video_client_choice = ttk.Combobox(panel, textvariable=self.video_target_client,
                                                values=CLIENTS, state="readonly", width=12)
-        self.video_client_choice.grid(row=1, column=1, sticky="ew", pady=5)
+        self.video_client_choice.grid(row=2, column=0, sticky="ew", padx=(0, gap))
+        self.video_refresh_hz = tk.StringVar(value="60")
+        ttk.Label(panel, text="屏幕刷新率 / Hz", style="PanelMuted.TLabel").grid(row=1, column=1, sticky="w")
+        refresh_entry = ttk.Spinbox(panel, textvariable=self.video_refresh_hz, from_=20, to=1000, width=12)
+        refresh_entry.grid(row=2, column=1, sticky="ew")
         self.video_fields = {}
-        inputs = [self.video_client_choice]
-        for row, (key, label, value) in enumerate([
-                ("fps", "每秒帧数 / FPS（可填小数，≤60）", "10"),
-                ("width", "画面宽度 / 列（1–18）", "10"),
-                ("height", "画面高度 / 行（1–128）", "12" if self.target_client.get() == "stable" else "24"),
-                ("start_ms", "视频与音乐开始 / ms", self.uniform_times[0]),
-                ("threshold", "黑白阈值 / 0–255", "128"),
-                ("brightness", "亮度 / -255–255", "0"),
-                ("contrast", "对比度 / >0–5", "1")], 2):
-            ttk.Label(panel, text=label, style="Muted.TLabel").grid(row=row, column=0, sticky="w", padx=(0, 16), pady=5)
+        inputs = [self.video_client_choice, refresh_entry, frame_entry]
+        for key, label, value, row, col in [
+                ("fps", "帧率 / FPS · ≤60", "10", 3, 0),
+                ("start_ms", "音画开始 / ms", self.uniform_times[0], 3, 1),
+                ("width", "列数 · 1–18", "10", 5, 0),
+                ("height", "行数 · 1–128", "12" if self.target_client.get() == "stable" else "24", 5, 1),
+                ("threshold", "黑白阈值 · 0–255", "128", 8, 0),
+                ("brightness", "亮度 · −255–255", "0", 10, 0),
+                ("contrast", "对比度 · >0–5", "1", 10, 1)]:
+            ttk.Label(panel, text=label, style="PanelMuted.TLabel").grid(
+                row=row, column=col, sticky="w", pady=(gap, 0))
             variable = self.video_fields[key] = tk.StringVar(value=value)
             entry = ttk.Entry(panel, textvariable=variable, width=12)
-            entry.grid(row=row, column=1, sticky="ew", pady=5)
+            entry.grid(row=row + 1, column=col, sticky="ew", padx=(0, gap if col == 0 else 0))
             inputs.append(entry)
+        ttk.Label(panel, text="画面调整", style="Heading.TLabel").grid(
+            row=7, column=0, columnspan=2, sticky="w", pady=(pad, 0))
+        self.video_fit = tk.StringVar(value="拉伸")
+        ttk.Label(panel, text="缩放", style="PanelMuted.TLabel").grid(row=8, column=1, sticky="w", pady=(gap, 0))
+        combo = ttk.Combobox(panel, textvariable=self.video_fit, values=("拉伸", "等比留边", "等比裁剪"),
+                             state="readonly", width=12)
+        combo.grid(row=9, column=1, sticky="ew")
+        inputs.append(combo)
         self.video_invert = tk.BooleanVar(value=False)
         invert = ttk.Checkbutton(panel, text="亮暗反转", variable=self.video_invert)
-        invert.grid(row=9, column=0, sticky="w", pady=5)
+        invert.grid(row=12, column=0, sticky="w", pady=(gap, 0))
         inputs.append(invert)
         self.video_merge_holds = tk.BooleanVar(value=True)
-        hold_option = ttk.Checkbutton(panel, text="连续单键转长条", variable=self.video_merge_holds)
-        hold_option.grid(row=9, column=1, sticky="w", pady=5)
+        hold_option = ttk.Checkbutton(panel, text="合并长条", variable=self.video_merge_holds)
+        hold_option.grid(row=12, column=1, sticky="w", pady=(gap, 0))
         inputs.append(hold_option)
-        self.video_fit = tk.StringVar(value="拉伸")
-        ttk.Label(panel, text="缩放方式", style="Muted.TLabel").grid(row=10, column=0, sticky="w")
-        combo = ttk.Combobox(panel, textvariable=self.video_fit, values=("拉伸", "等比留边", "等比裁剪"), state="readonly", width=12)
-        combo.grid(row=10, column=1, pady=5)
-        inputs.append(combo)
-        self.video_refresh_hz = tk.StringVar(value="60")
-        ttk.Label(panel, text="实际刷新率 / Hz（如 59.94、60000/1001）", style="Muted.TLabel").grid(row=11, column=0, sticky="w")
-        refresh_entry = ttk.Spinbox(panel, textvariable=self.video_refresh_hz, from_=20, to=1000, width=12, foreground="#000000")
-        refresh_entry.grid(row=11, column=1, pady=5)
-        inputs.append(refresh_entry)
-        self.video_frame_index = tk.StringVar(value="1")
-        ttk.Label(panel, text="预览帧序号 / 从 1 开始", style="Muted.TLabel").grid(row=12, column=0, sticky="w", pady=(12, 0))
-        frame_entry = ttk.Entry(panel, textvariable=self.video_frame_index, width=12)
-        frame_entry.grid(row=12, column=1, pady=(12, 0))
-        inputs.append(frame_entry)
-        self.import_status = tk.StringVar(value="导入会替换当前画布；失败或取消时保留原项目。")
-        ttk.Label(panel, textvariable=self.import_status, wraplength=480, style="Muted.TLabel").grid(
-            row=13, column=0, columnspan=2, sticky="w", pady=8)
-        buttons = ttk.Frame(panel)
-        buttons.grid(row=14, column=0, columnspan=2, sticky="e", pady=(8, 0))
+        ttk.Label(panel, text="刷新率支持 59.94、60000/1001。\n成功导入后替换画布，取消或失败不影响原项目。",
+                  style="PanelMuted.TLabel", wraplength=round(360 * self.scale)).grid(
+                      row=13, column=0, columnspan=2, sticky="w", pady=(pad, 0))
+        footer = ttk.Frame(dialog, padding=(pad, gap, pad, gap))
+        footer.pack(fill="x")
+        self.import_status = tk.StringVar(value="视频音轨将一并导入")
+        ttk.Label(footer, textvariable=self.import_status, wraplength=round(540 * self.scale),
+                  style="Muted.TLabel").pack(side="left")
+        buttons = ttk.Frame(footer)
+        buttons.pack(side="right")
 
         def request_options():
             options = {key: (int(variable.get()) if key in ("width", "height") else float(variable.get()))
@@ -655,7 +730,7 @@ class PaintApp:
             return options
 
         def describe_options(*args):
-            self.video_preview_label.set("参数或帧已修改，请点击预览刷新。")
+            self.video_preview_label.set("参数已修改，点击刷新预览")
 
         # Client defaults may follow the selection until the user edits height;
         # never silently discard a requested row count when switching clients.
@@ -722,13 +797,13 @@ class PaintApp:
 
         self.video_cancel_button = ttk.Button(buttons, text="取消", command=cancel)
         self.video_cancel_button.pack(side="left", padx=8)
-        self.video_start_button = ttk.Button(buttons, text="导入视频和音乐", command=start, style="Accent.TButton")
+        self.video_start_button = ttk.Button(buttons, text="开始导入", command=start, style="Accent.TButton")
         self.video_start_button.pack(side="left")
-        self.video_preview_button = ttk.Button(preview_panel, text="预览所选帧", command=lambda: start(preview=True))
-        self.video_preview_button.pack(anchor="e", pady=8)
+        self.video_preview_button = ttk.Button(preview_controls, text="刷新预览", command=lambda: start(preview=True))
+        self.video_preview_button.pack(side="right")
         self.video_inputs = inputs
         dialog.protocol("WM_DELETE_WINDOW", cancel)
-        describe_options()
+        self.video_preview_label.set("选择帧后点击刷新预览")
 
     def _apply_video(self, result):
         plan = result["plan"]
@@ -764,18 +839,22 @@ class PaintApp:
                 error = ImportCancelled("已取消视频导入，原项目未改变。")
             if error is None and self.import_job == "preview":
                 self.video_preview_result = result
-                self.video_source_image = tk.PhotoImage(data=result["source_ppm"], format="PPM")
+                source = tk.PhotoImage(data=result["source_ppm"], format="PPM")
+                scale = Fraction(self.scale).limit_denominator(4)
+                self.video_source_image = source.zoom(scale.numerator).subsample(scale.denominator)
                 self.video_source_canvas.delete("all")
-                self.video_source_canvas.create_image(0, 0, image=self.video_source_image, anchor="nw")
+                self.video_source_canvas.create_image(int(self.video_source_canvas["width"]) / 2,
+                    int(self.video_source_canvas["height"]) / 2, image=self.video_source_image)
                 self.video_result_canvas.delete("all")
                 rows = result["frame"]
+                width, height = int(self.video_result_canvas["width"]), int(self.video_result_canvas["height"])
                 for y, row in enumerate(rows):
                     for x, pixel in enumerate(row):
                         if pixel == "#":
-                            self.video_result_canvas.create_rectangle(x * 320 / len(row), y * 180 / len(rows),
-                                (x + 1) * 320 / len(row), (y + 1) * 180 / len(rows), fill=INK, outline="")
-                self.video_preview_label.set(f"第 {result['frame_index'] + 1} 帧 · 源时间 {result['time_ms']:.2f} ms · 转换结果")
-                self.import_status.set("预览完成。可调整参数、选择其他帧，或导入整个视频。")
+                            self.video_result_canvas.create_rectangle(x * width / len(row), y * height / len(rows),
+                                (x + 1) * width / len(row), (y + 1) * height / len(rows), fill="black", outline="")
+                self.video_preview_label.set(f"第 {result['frame_index'] + 1} 帧 · 源时间 {result['time_ms'] / 1000:.2f} s")
+                self.import_status.set("预览就绪 · 导入将使用完整视频")
                 for entry in self.video_inputs:
                     entry.configure(state="readonly" if isinstance(entry, ttk.Combobox) else "normal")
                 self.video_start_button.configure(state="normal")
@@ -857,12 +936,14 @@ class PaintApp:
         self.entries["transition_ms"].configure(
             state="disabled" if self.fast_clear.get() else "normal",
             textvariable=self.automatic_transition if self.fast_clear.get() else self.fields["transition_ms"])
-        self.time_labels[2].configure(text="自动切帧 / ms" if self.fast_clear.get() else "切帧时长 / ms")
+        self.time_labels[2].configure(text="自动切帧 / ms" if self.fast_clear.get() else "切帧 / ms")
         self.automatic_transition.set("自动")
-        self.playback_hint.set(
-            "stable · 向下滚动 · 固定滚速 · NF（不要 Auto）。\n合并 1–18K 舞台；低键数受列宽上限限制。"
-            if self.target_client.get() == "stable" else
-            "lazer · 向下滚动 · 同步游戏滚速 · NF（不要 Auto）。\n原版 >10K 仍拆分，11/13/15/17K 会少一列。")
+        hint = "向下滚动 · " + ("固定滚速" if self.target_client.get() == "stable" else "同步游戏滚速") + " · NF，勿用 Auto"
+        if self.target_client.get() == "lazer" and len(self.frames[0][0]) > 10:
+            hint += "\nlazer >10K 双舞台；11/13/15/17K 会少一列。"
+        elif self.target_client.get() == "stable" and len(self.frames[0][0]) * 100 < 480 * DEFAULT_ASPECT_RATIO:
+            hint += "\nstable 每列最多 100，当前画布无法铺满横向。"
+        self.playback_hint.set(hint)
         try:
             if compiled_plan is not None:
                 self.plan = compiled_plan
@@ -899,13 +980,10 @@ class PaintApp:
             self.seek_max = self.plan["end_ms"] + self.plan["transition_ms"] + 180
             self.seek.configure(from_=self.seek_min, to=self.seek_max)
             self.seek_time.set(self.plan["frames"][self.selected]["start_ms"])
-            self.automatic_transition.set(number(self.plan["sweep_ms"]))
+            self.automatic_transition.set(f"{self.plan['sweep_ms']:.3f}")
             warning = refresh_warning(self.plan)
-            self._status(f"{self.plan['target_client']} · {self.plan['keys']}K · {len(self.frames)} 帧 · {len(self.plan['notes'])} 音符 · "
-                         f"{'极速' if self.fast_clear.get() else ''}切帧 {self.plan['sweep_ms']:.3f} ms · "
-                         f"单帧最大预计漂移 {self.plan['drift_at_768px']:.4f} px / 768 px"
-                         + (" · 列宽受限" if self.plan["stage_width_fraction"] < 1 else "")
-                         + (" · 已带视频音轨" if self.audio_data is not None else "")
+            self._status(f"就绪 · {len(self.plan['notes'])} 音符"
+                         + (" · 含音轨" if self.audio_data is not None else "")
                          + (" · " + warning if warning else ""))
         state = "normal" if self.plan is not None else "disabled"
         self.play_button.configure(state=state)
@@ -917,8 +995,8 @@ class PaintApp:
         self.preview.delete("all")
         width, height = self.preview.winfo_width(), self.preview.winfo_height()
         if self.plan is None:
-            self.preview.create_text(width / 2, height / 2, text="画好图案并填写有效参数后\n这里会显示舞台预览", fill=MUTED, justify="center")
-            self.time_label.set("等待有效图案与参数")
+            self.preview.create_text(width / 2, height / 2, text="绘制图案后预览", fill=MUTED, justify="center")
+            self.time_label.set("等待预览")
             return
         full_h = max(1, min(height - 34 * self.scale, (width - 24 * self.scale) / DEFAULT_ASPECT_RATIO))
         stage_h = full_h
@@ -952,8 +1030,8 @@ class PaintApp:
                                   (index + 1 < len(frames) and
                                    frames[index].get("note_frame", index) == frames[index + 1].get("note_frame", index + 1)))
         frame = index + 1 if holding else None
-        phase = f"第 {frame} / {len(self.frames)} 帧" if frame is not None else "空档 / 进场 / 换帧 / 退场"
-        self.time_label.set(f"{current:,.2f} ms   ·   {phase}")
+        phase = f"帧 {frame}/{len(self.frames)}" if frame is not None else "过渡 / 空档"
+        self.time_label.set(f"{current / 1000:.2f} s · {phase}")
 
     def _seek_changed(self, value):
         self._stop()
@@ -1012,11 +1090,9 @@ class PaintApp:
                 else:
                     self.last_output = output
                     self.folder_button.configure(state="normal")
-                    self._status(f"已导出：{output / 'pattern.osz'} · "
-                                 + ("请按播放设置.txt 匹配实际刷新率。"
-                                    if self.video is not None and self.video.get("refresh_hz") is not None else
-                                    "也已生成 HTML 预览与报告。")
-                                 + " 请导入同目录中匹配屏幕比例的 pixel-film*.osk（默认 16:10）。")
+                    self._status("已导出 pattern.osz · 请一并导入对应比例的 pixel-film*.osk"
+                                 + (" · 刷新率见播放设置.txt"
+                                    if self.video is not None and self.video.get("refresh_hz") is not None else ""))
         self.tick_job = self.root.after(16 if self.playing else 80, self._tick)
 
     def choose_output(self):

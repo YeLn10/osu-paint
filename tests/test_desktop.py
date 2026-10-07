@@ -325,7 +325,7 @@ class DesktopTests(unittest.TestCase):
         self.app.select_frame()
         self.assertEqual(self.app.selected, 0)
         self.assertEqual(self.app.seek_time.get(), self.app.plan["frames"][0]["start_ms"])
-        self.assertIn("第 1 / 2 帧", self.app.time_label.get())
+        self.assertIn("帧 1/2", self.app.time_label.get())
 
     def test_playback_advances_stops_and_restarts(self):
         self.app.toggle_play()

@@ -308,6 +308,25 @@ class DesktopVideoTests(unittest.TestCase):
         self.assertIsNone(self.app.import_dialog)
         self.assertEqual(self.app.plan, result["plan"])
 
+    def test_video_preview_fits_fractional_display_scale(self):
+        self.app.scale = 1.5
+        self.root.deiconify()
+        self.open_video_dialog()
+        preview = dict(frame=["##", "##"], source_ppm=b"P6\n320 180\n255\n" + b"\xff" * (320 * 180 * 3),
+                       frame_index=0, time_ms=0)
+        with patch("osu_paint_desktop.preview_video_frame", return_value=preview):
+            self.app.video_preview_button.invoke()
+            self.wait_for(lambda: not self.app.importing)
+        self.assertEqual((self.app.video_source_image.width(), self.app.video_source_image.height()), (480, 270))
+        self.assertLessEqual(self.app.video_source_image.width(), self.app.video_source_canvas.winfo_width())
+        canvas = self.app.video_result_canvas
+        rectangles = [canvas.coords(item) for item in canvas.find_all()]
+        self.assertEqual((min(r[0] for r in rectangles), min(r[1] for r in rectangles)), (0, 0))
+        self.assertEqual((max(r[2] for r in rectangles), max(r[3] for r in rectangles)),
+                         (canvas.winfo_width(), canvas.winfo_height()))
+        self.assertTrue(all(canvas.itemcget(item, "fill") == "black" for item in canvas.find_all()))
+        self.app.video_cancel_button.invoke()
+
     def test_frame_preview_keeps_project_and_passes_all_conversion_settings(self):
         before = copy.deepcopy(self.app._project_data())
         self.open_video_dialog()
