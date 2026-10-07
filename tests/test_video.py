@@ -163,6 +163,16 @@ class VideoImportTests(unittest.TestCase):
             self.assertTrue(repeated["audio"].startswith(b"OggS"))
 
 
+    def test_both_client_phase_schedules_leave_the_decoded_audio_unchanged(self):
+        pcm_args = ["-i", "pipe:0", "-ac", "1", "-ar", "48000", "-f", "f32le", "pipe:1"]
+        original = self.load(start_ms=2000.6)
+        expected = self.ffmpeg(pcm_args, input=original["audio"])
+        for client in ("lazer", "stable"):
+            with self.subTest(client=client):
+                result = self.load(start_ms=2000.6, target_client=client, refresh_hz=60, merge_holds=True)
+                self.assertEqual(result["video"]["start_ms"], 2000.6)
+                self.assertEqual(self.ffmpeg(pcm_args, input=result["audio"]), expected)
+
     def test_audio_includes_import_offset_and_original_stream_delay(self):
         result = self.load()
         output = self.directory / "export"

@@ -128,7 +128,11 @@ class StableGeometryTests(unittest.TestCase):
         for index, frame in enumerate(plan["frames"]):
             expected = 2000 + index * 3 * 1000 / refresh
             self.assertLessEqual(frame["start_ms"], expected + 1e-8)
-            self.assertLess(expected - frame["start_ms"], 1 + 1e-8)
+            # Integer sweeps may finish earlier within the preceding refresh,
+            # but must never shift a picture into an earlier nominal display tick.
+            self.assertLess(expected - frame["start_ms"], 1000 / refresh)
+            if index:
+                self.assertGreater(plan["frames"][index - 1]["sweep_start_ms"], expected - 1000 / refresh)
         self.assertAlmostEqual(plan["video"]["fps"], refresh / 3)
         self.assertEqual(plan["video"]["refresh_hz"], refresh)
 

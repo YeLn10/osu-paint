@@ -159,6 +159,47 @@ def _run_ffmpeg(arguments, cancel):
         return log
 
 
+def _transition_phases(frame_plans):
+    # Advance for actual redraw groups, not sample numbers. This includes the
+    # occasional redraw of a long still picture required by the core's drift cap.
+    changes = 0
+    phases = [0.0]
+    for previous, current in zip(frame_plans, frame_plans[1:]):
+        changes += current["note_frame"] != previous["note_frame"]
+        phases.append(1 - abs(1 - (changes / 64) % 2))
+    return phases
+
+
+def _transition_phase_exposure(plan, refresh_period, origin):
+    """Exact worst fixed-phase cut count, plus total internal exposure time."""
+    period = float(refresh_period)
+    active = 0
+    events = []
+    total = 0.0
+    for previous, current in zip(plan["frames"], plan["frames"][1:]):
+        if (previous["note_frame"] == current["note_frame"] or
+                not any("#" in row for row in previous["pattern"] + current["pattern"])):
+            continue
+        start, end = previous["sweep_start_ms"], current["start_ms"]
+        duration = end - start
+        total += duration
+        if duration >= period:
+            active += 1
+            continue
+        low = (start - float(origin)) % period
+        high = low + duration
+        if high > period:
+            active += 1
+            high -= period
+        events.extend(((low, 1), (high, -1)))
+    worst = active
+    # Open intervals: departures precede arrivals at equal phase boundaries.
+    for _, change in sorted(events):
+        active += change
+        worst = max(worst, active)
+    return worst, total
+
+
 def import_video(path, *, fps=10, width=10, height=None, start_ms=2000, scroll_speed=27,
                  progress=None, cancel=None, threshold=128, brightness=0,
                  contrast=1, invert=False, fit="stretch",
@@ -218,29 +259,54 @@ def import_video(path, *, fps=10, width=10, height=None, start_ms=2000, scroll_s
         if target_client == "stable":
             starts = [math.ceil(origin)] + [math.floor(origin + i * period_exact)
                                            for i in range(1, count + 1)]
-            windows = [(starts[i], starts[i + 1] - (transition if i < count - 1 else 0))
-                       for i in range(count)]
-        elif refresh_hz is None:
-            starts = [float(origin + i * period_exact) for i in range(count + 1)]
-            windows = [(starts[i], starts[i + 1] - (transition if i < count - 1 else 0))
-                       for i in range(count)]
         else:
-            refresh_period = float(Fraction(1000) / Fraction(str(refresh_hz)))
+            starts = [float(origin + i * period_exact) for i in range(count + 1)]
+        nominal_starts = starts
+        if target_client == "lazer" and refresh_hz is not None:
+            refresh_period = float(period_exact / round(refresh_hz / fps))
             guard = min(transition / 2, (refresh_period - transition) / 4)
-            margin_span = refresh_period - transition - 2 * guard
-            # Move across the protected gap in 64 cuts, then reflect instead of
-            # wrapping. Large per-cut phase jumps cause alternating short/long
-            # displayed frames even when the actual sweep is very brief.
-            phase_step = 1 / 64
-            starts = [float(origin)] + [float(origin + i * period_exact) - guard
-                                       - margin_span * (1 - abs(1 - (i * phase_step) % 2))
-                                       for i in range(1, count)]
-            windows = [(starts[i], starts[i + 1] - transition) for i in range(count - 1)]
-            windows.append((starts[-1], float(origin + count * period_exact)))
+            span = refresh_period - transition - 2 * guard
+            # Keep the proven sample-based walk as the baseline. A candidate
+            # based on real redraws is adopted only if its phase exposure improves.
+            starts = [starts[0]] + [starts[i] - guard - span * (1 - abs(1 - (i / 64) % 2))
+                                   for i in range(1, count)] + [starts[-1]]
+        windows = [(starts[i], starts[i + 1] - (transition if i < count - 1 else 0))
+                   for i in range(count)]
         report("正在编译谱面与视频时间轴…")
         plan = compile_frames(frames, scroll_speed=scroll_speed, frame_times=windows,
                               fast_clear=True, allow_empty_frames=True, anchor_reference=True,
                               merge_holds=merge_holds, target_client=target_client)
+        if refresh_hz is not None:
+            phases = _transition_phases(plan["frames"])
+            refresh_period = period_exact / round(refresh_hz / fps)
+            if target_client == "stable":
+                # Use the core's actual integer sweep length, not a duplicate of
+                # its endpoint-slot algorithm. Leave 1 ms for flooring; long
+                # sweeps with no protected gap retain their original schedule.
+                span = max(0, refresh_period - plan["sweep_ms"] - 1)
+                # Apply a smooth offset BEFORE rounding. Interpolating rounded
+                # endpoints can introduce unnecessary 2 ms cadence jumps.
+                spread_starts = [starts[0]] + [math.floor(origin + i * period_exact - span * Fraction(phases[i]))
+                                              for i in range(1, count)] + [starts[-1]]
+            else:
+                guard = min(transition / 2, (float(refresh_period) - transition) / 4)
+                span = float(refresh_period) - transition - 2 * guard
+                spread_starts = [starts[0]] + [nominal_starts[i] - guard - span * phases[i]
+                                              for i in range(1, count)] + [starts[-1]]
+            spread_windows = [(spread_starts[i], spread_starts[i + 1] - (transition if i < count - 1 else 0))
+                              for i in range(count)]
+            # Keep the scheduling budget and minimum display duration. Near-limit
+            # FPS may have no room to shift boundaries; never silently reduce rows.
+            if spread_starts != starts and all(end - start >= (1 if target_client == "stable" else 1e-7)
+                                              for start, end in spread_windows):
+                _check_cancel(cancel)
+                candidate = compile_frames(frames, scroll_speed=scroll_speed, frame_times=spread_windows,
+                                           fast_clear=True, allow_empty_frames=True, anchor_reference=True,
+                                           merge_holds=merge_holds, target_client=target_client)
+                worst, total = _transition_phase_exposure(plan, refresh_period, origin)
+                new_worst, new_total = _transition_phase_exposure(candidate, refresh_period, origin)
+                if new_worst < worst and new_total <= total + 1e-7 and len(candidate["notes"]) <= len(plan["notes"]):
+                    plan = candidate
         audio_data = None
         if re.search(r"^\s*Stream #0:\d+.*Audio:", log, re.MULTILINE):
             report("正在提取音乐并对齐视频开始时间…（可取消）")
