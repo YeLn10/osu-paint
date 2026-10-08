@@ -312,11 +312,11 @@ def import_video(path, *, fps=10, width=10, height=None, start_ms=2000, scroll_s
             # after compiling it, so tighter packing cannot undo earlier gains.
             selected_gap = False
             worst, total, longest = _transition_phase_exposure(plan, refresh_period, origin)
-            for actual_gap, step in ((False, 1), (True, 1), (None, 9)):
+            for actual_gap, step in ((False, 1), (True, 1), (None, 9), (None, 7), (None, 5), (None, 3)):
                 if actual_gap is None:
                     actual_gap = target_client == "lazer" or selected_gap
                 if step > 1 and longest <= 1:
-                    continue
+                    break
                 # An odd stride visits the same 128-point triangular cycle in
                 # a different order, separating hits without a wraparound jump.
                 phases = _transition_phases(plan["frames"], step=step)
@@ -361,6 +361,8 @@ def import_video(path, *, fps=10, width=10, height=None, start_ms=2000, scroll_s
                         a["note_frame"] != b["note_frame"] and
                         a["sweep_start_ms"] <= float(origin + i * period_exact - refresh_period) + 1e-7
                         for i, (a, b) in enumerate(zip(candidate["frames"], candidate["frames"][1:]), 1)):
+                    if step > 1:
+                        break
                     continue
                 new_worst, new_total, new_longest = _transition_phase_exposure(candidate, refresh_period, origin)
                 improves = (new_worst < worst if step == 1 else
@@ -369,6 +371,10 @@ def import_video(path, *, fps=10, width=10, height=None, start_ms=2000, scroll_s
                     plan = candidate
                     selected_gap = actual_gap
                     worst, total, longest = new_worst, new_total, new_longest
+                # Try smaller odd strides only when scheduling rejects a walk.
+                # Compile at most one faster candidate, even if it has no benefit.
+                if step > 1:
+                    break
         audio_data = None
         if re.search(r"^\s*Stream #0:\d+.*Audio:", log, re.MULTILINE):
             report("正在提取音乐并对齐视频开始时间…（可取消）")

@@ -78,7 +78,9 @@ class GhostPhaseTests(unittest.TestCase):
 
     def test_faster_walk_rejects_more_hits_even_when_streak_is_shorter(self):
         from osu_paint_video import compile_frames, _transition_phase_exposure, _transition_phases
-        baseline = video_sequence('stable', hz=60)
+        with patch('osu_paint_video._transition_phases',
+                   side_effect=lambda frames, step: _transition_phases(frames)):
+            baseline = video_sequence('stable', hz=60)
         compiled = []
         def record(*args, **kwargs):
             plan = compile_frames(*args, **kwargs)
@@ -102,7 +104,7 @@ class GhostPhaseTests(unittest.TestCase):
             baseline = video_sequence('lazer', hz=480)
         with patch('osu_paint_video.compile_frames', wraps=compile_frames) as compile_call, \
                 patch('osu_paint_video._transition_phases', side_effect=lambda frames, step:
-                      [i % 2 for i in range(len(frames))] if step == 9 else _transition_phases(frames)):
+                      [i % 2 for i in range(len(frames))] if step > 1 else _transition_phases(frames)):
             result = video_sequence('lazer', hz=480)
         self.assertEqual(compile_call.call_count, 2)
         self.assertEqual(encode_osu(result), encode_osu(baseline))
@@ -110,6 +112,27 @@ class GhostPhaseTests(unittest.TestCase):
     def test_short_lazer_sequence_breaks_consecutive_transition_hits(self):
         plan = video_sequence('lazer', hz=1000, changes=3)
         self.assertLessEqual(phase_streak(plan, 1, 2000), 2)
+
+    def test_short_stable_sequence_uses_a_smaller_walk_within_cadence_limit(self):
+        plan = video_sequence('stable', hz=60, changes=4)
+        self.assertLessEqual(phase_streak(plan, Fraction(50, 3), 2000), 3)
+
+    def test_smaller_walk_reduces_stable_streaks_without_more_exposure(self):
+        from osu_paint_video import compile_frames, _transition_phase_exposure
+        for hz, worst_limit, streak_limit in ((60, 15, 6), (90, 27, 17)):
+            with self.subTest(hz=hz):
+                with patch('osu_paint_video.compile_frames', wraps=compile_frames) as compiled:
+                    plan = video_sequence('stable', hz=hz)
+                score = _transition_phase_exposure(plan, Fraction(1000, hz), 2000)
+                self.assertLessEqual(score[0], worst_limit)
+                self.assertEqual(score[1], 192)
+                self.assertLessEqual(score[2], streak_limit)
+                self.assertEqual(score[2], phase_streak(plan, Fraction(1000, hz), 2000))
+                self.assertEqual(len(plan['notes']), 65)
+                self.assertLessEqual(compiled.call_count, 4)
+                period = 1000 / plan['video']['fps']
+                self.assertTrue(all(abs(b['start_ms'] - a['start_ms'] - period) <= 1 + 1e-7
+                                    for a, b in zip(plan['frames'], plan['frames'][1:])))
 
     def test_faster_phase_walk_reduces_streaks_without_more_exposure(self):
         from osu_paint_video import _transition_phase_exposure
@@ -208,14 +231,16 @@ class GhostPhaseTests(unittest.TestCase):
         from test_stable_geometry import decode as stable_decode, position as stable_position
         for client, decoder, position in (("lazer", lazer_decode, lazer_position),
                                            ("stable", stable_decode, stable_position)):
-            rates = (60, 120, 144, 165, 60000 / 1001) + ((240, 480, 1000) if client == "lazer" else ())
+            rates = (60, 90, 120, 144, 165, 60000 / 1001) + ((240, 480, 1000) if client == "lazer" else ())
             for hz in rates:
                 for merged in (False, True):
                     with self.subTest(client=client, hz=hz, merged=merged):
                         accelerated = merged and ((client == 'lazer' and hz in (480, 1000)) or
-                                                  (client == 'stable' and hz in (120, 144)))
-                        repeat = 1 if accelerated else 2
-                        plan = video_sequence(client, changes=64 if accelerated else 12, repeat=repeat, hz=hz, height=3,
+                                                  (client == 'stable' and hz in (60, 90, 120, 144)))
+                        repeated = client == 'lazer' and hz == 60 and merged
+                        repeat = 128 if repeated else 1 if accelerated else 2
+                        changes = 16 if repeated else 64 if accelerated else 12
+                        plan = video_sequence(client, changes=changes, repeat=repeat, hz=hz, height=3,
                                               merged=merged, origin=2000.6)
                         points, _ = decoder(encode_osu(plan))
                         objects = [line.split(',') for line in encode_osu(plan).split('[HitObjects]\n')[1].splitlines() if line]
@@ -271,12 +296,16 @@ class GhostPhaseTests(unittest.TestCase):
 
     def test_repeated_lazer_frames_preserve_notes_drift_and_total_exposure(self):
         from test_transition_optimization import transition_exposure
+        from osu_paint_video import _transition_phase_exposure
         plan = video_sequence('lazer', repeat=128, changes=16)
         self.assertEqual(len(plan['notes']), 33)
         self.assertLessEqual(plan['drift_at_768px'], .5)
         self.assertAlmostEqual(transition_exposure(plan), 20.808, places=6)
         self.assertEqual(plan['start_ms'], 2000)
         self.assertEqual(plan['end_ms'], 2000 + 2049 * 50)
+        worst, _, longest = _transition_phase_exposure(plan, Fraction(50, 3), 2000)
+        self.assertLessEqual(worst, 2)
+        self.assertLessEqual(longest, 2)
         counts, cuts = phase_counts(plan)
         self.assertLessEqual(max(counts), 4)
         self.assertEqual(len(cuts), 16)
