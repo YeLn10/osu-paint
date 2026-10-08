@@ -10,7 +10,7 @@
 
 | 文件 | 屏幕 / 游戏窗口示例 |
 | --- | --- |
-| `pixel-film.osk` | 16:10：3072×1920、1920×1200、2560×1600 |
+| `pixel-film-16x10.osk` | 16:10：3072×1920、1920×1200、2560×1600 |
 | `pixel-film-16x9.osk` | 16:9：1280×720、1920×1080、2560×1440、3840×2160 |
 | `pixel-film-4x3.osk` | 4:3：1024×768、1600×1200 |
 | `pixel-film-2560x1080.osk` | 2560×1080 |
@@ -57,7 +57,7 @@ python -m unittest discover -s tests -p test_skin.py -v
 
 ## 统一工具的 stable 皮肤
 
-默认构建两套，各含上述五个比例；`--client lazer` / `--client stable` 可单独构建。lazer 文件名保持不变，stable 为 `pixel-film-stable.osk`、`pixel-film-stable-16x9.osk` 等，内部名称也单独区分。根目录两套均为 24 行，实际导出按画布行数生成所选客户端的五套，不能混用。
+默认构建两套，各含上述五个比例；`--client lazer` / `--client stable` 可单独构建。默认 16:10 文件名分别为 `pixel-film-16x10.osk`、`pixel-film-stable-16x10.osk`，内部名称也注明 `16:10` 和实际行数。其他比例同样写入文件名，stable 另有客户端后缀。根目录两套均为 24 行，实际导出按画布行数生成所选客户端的五套，不能混用。2026-10-08 起默认包补齐比例后缀；已有导出目录中的旧名称文件不会自动删除。
 
 stable 使用 `SplitStages: 0`、`SpecialStyle: 0`、`ColumnStart: 0`、`ColumnRight: 0`，合并 1–18K 并保留奇数列。每列宽度最多 100，所以低键数不会横向铺满（16:10 至少 8 列）；预览使用相同舞台宽度。1K 省略 `ColumnSpacing`，空列表会使原生皮肤加载失败。stable 额外提供透明判定/警告资源。头尾与身体沿用相同纯黑 PNG，但 lazer 的图集证据不能替代 stable GPU 验收。
 

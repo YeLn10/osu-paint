@@ -139,7 +139,7 @@ class VideoImportTests(unittest.TestCase):
             self.assertTrue(notes)
             self.assertTrue(all(line.split(",")[3] == "1" for line in notes))
             self.assertTrue(archive.read("audio.ogg").startswith(b"OggS"))
-        with zipfile.ZipFile(output / "pixel-film.osk") as skin:
+        with zipfile.ZipFile(output / "pixel-film-16x10.osk") as skin:
             self.assertIsNone(skin.testzip())
             self.assertIn("Keys: 16", skin.read("skin.ini").decode())
 

@@ -8,7 +8,7 @@ import zlib
 
 DEFAULT_ASPECT_RATIO = 16 / 10
 SKIN_PROFILES = {
-    "pixel-film.osk": (DEFAULT_ASPECT_RATIO, "16:10"),
+    "pixel-film-16x10.osk": (DEFAULT_ASPECT_RATIO, "16:10"),
     "pixel-film-16x9.osk": (16 / 9, "16:9"),
     "pixel-film-4x3.osk": (4 / 3, "4:3"),
     "pixel-film-2560x1080.osk": (2560 / 1080, "2560x1080"),

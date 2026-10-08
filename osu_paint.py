@@ -798,7 +798,7 @@ def main():
     except (ValueError, OSError) as error:
         parser.error(str(error))
     print(f"已生成 {args.output.resolve() / 'pattern.osz'}")
-    print(f"请导入同目录中匹配屏幕比例的 pixel-film*.osk；默认 {skin_filename('pixel-film.osk', plan['target_client'])} 适用于 16:10（3072×1920）。")
+    print(f"请导入同目录中匹配屏幕比例的 pixel-film*.osk；默认 {skin_filename('pixel-film-16x10.osk', plan['target_client'])} 适用于 16:10（3072×1920）。")
     print(f"{plan['keys']}K / {len(plan['frames'])} 帧 / {len(plan['notes'])} 音符 / 游戏滚速 {number(args.scroll_speed)}")
     print(f"单帧最大预计漂移 {plan['drift_at_768px']:.4f} px（768 px 高度），不是精确零速。")
     if refresh_warning(plan):

@@ -372,7 +372,7 @@ class DesktopTests(unittest.TestCase):
 
     def test_overwrite_cancel_preserves_an_existing_skin(self):
         with tempfile.TemporaryDirectory() as directory:
-            skin = Path(directory) / "pixel-film.osk"
+            skin = Path(directory) / "pixel-film-16x10.osk"
             skin.write_bytes(b"keep")
             self.app.output_dir.set(directory)
             with patch("osu_paint_desktop.messagebox.askyesno", return_value=False) as confirm:

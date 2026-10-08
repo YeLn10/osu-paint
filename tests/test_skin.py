@@ -7,7 +7,7 @@ import unittest
 import zipfile
 import zlib
 
-from osu_paint_skin import SKIN_PROFILES, build_skin
+from osu_paint_skin import SKIN_PROFILES, build_skin, build_skins
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -56,7 +56,7 @@ def png_pixels(data):
 
 class SkinTests(unittest.TestCase):
     def setUp(self):
-        self.archive = zipfile.ZipFile(ROOT / "pixel-film.osk")
+        self.archive = zipfile.ZipFile(ROOT / "pixel-film-16x10.osk")
         self.addCleanup(self.archive.close)
         self.sections, self.section_count = mania_sections(
             self.archive.read("skin.ini").decode("utf-8-sig"))
@@ -72,6 +72,16 @@ class SkinTests(unittest.TestCase):
                     self.assertEqual(len(values), length)
                     expected = 768 / keys if option == "ColumnWidth" else 0
                     self.assertTrue(all(abs(value - expected) < 1e-8 for value in values))
+
+    def test_default_export_names_include_the_aspect_ratio(self):
+        for client, expected in (("lazer", "pixel-film-16x10.osk"),
+                                 ("stable", "pixel-film-stable-16x10.osk")):
+            with self.subTest(client=client), tempfile.TemporaryDirectory() as directory:
+                paths = build_skins(directory, rows=12, target_client=client)
+                self.assertEqual(len(paths), 5)
+                self.assertEqual(paths[0].name, expected)
+                with zipfile.ZipFile(paths[0]) as skin:
+                    self.assertIn("Pixel Film 16:10 (12 rows)", skin.read("skin.ini").decode())
 
     def test_skin_omits_unsupported_stage_switches_and_hides_borders(self):
         for keys in range(10, 19):

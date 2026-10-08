@@ -72,5 +72,5 @@ class ClientTests(unittest.TestCase):
             with patch("sys.argv", ["osu_paint.py", str(source), "--client", "stable", "--start-ms", "2000",
                                     "--end-ms", "2400", "--fast-clear", "--output", str(root / "out")]), redirect_stdout(output):
                 main()
-            self.assertIn("pixel-film-stable.osk", output.getvalue())
-            self.assertTrue((root / "out/pixel-film-stable.osk").exists())
+            self.assertIn("pixel-film-stable-16x10.osk", output.getvalue())
+            self.assertTrue((root / "out/pixel-film-stable-16x10.osk").exists())

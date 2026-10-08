@@ -375,6 +375,34 @@ def import_video(path, *, fps=10, width=10, height=None, start_ms=2000, scroll_s
                 # Compile at most one faster candidate, even if it has no benefit.
                 if step > 1:
                     break
+            # A long stable sweep confined to one refresh gap can intersect the
+            # same display phase on every cut. At low video FPS, allow its end
+            # to walk across a whole refresh period, at the cost of showing the
+            # next picture up to one refresh early. Keep the audio clock fixed.
+            if (target_client == "stable" and refresh_period / 2 < plan["sweep_ms"] < refresh_period
+                    and period_exact - 2 * refresh_period >= transition + 1):
+                phases = _transition_phases(plan["frames"])
+                span = refresh_period - 1  # floor adds less than one ms of lead.
+                spread_starts = [starts[0]] + [
+                    math.floor(origin + i * period_exact - span * Fraction(phases[i]))
+                    for i in range(1, count)] + [starts[-1]]
+                spread_windows = [(spread_starts[i], spread_starts[i + 1] - (transition if i < count - 1 else 0))
+                                  for i in range(count)]
+                if (all(abs(b - a - period) <= 1 + 1e-7
+                        for a, b in zip(spread_starts[:-2], spread_starts[1:-1]))
+                        and all(end - start >= 1 for start, end in spread_windows)
+                        and spread_starts != [f["start_ms"] for f in plan["frames"]] + [plan["end_ms"]]):
+                    _check_cancel(cancel)
+                    candidate = compile_frames(frames, scroll_speed=scroll_speed, frame_times=spread_windows,
+                                               fast_clear=True, allow_empty_frames=True, anchor_reference=True,
+                                               merge_holds=merge_holds, target_client=target_client)
+                    new_worst, new_total, new_longest = _transition_phase_exposure(candidate, refresh_period, origin)
+                    if (new_worst < worst and new_longest < longest and new_total <= total + 1e-7
+                            and len(candidate["notes"]) <= len(plan["notes"])
+                            and all(a["note_frame"] == b["note_frame"] or
+                                    a["sweep_start_ms"] > float(origin + i * period_exact - 2 * refresh_period)
+                                    for i, (a, b) in enumerate(zip(candidate["frames"], candidate["frames"][1:]), 1))):
+                        plan = candidate
         audio_data = None
         if re.search(r"^\s*Stream #0:\d+.*Audio:", log, re.MULTILINE):
             report("正在提取音乐并对齐视频开始时间…（可取消）")
