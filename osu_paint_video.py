@@ -159,21 +159,24 @@ def _run_ffmpeg(arguments, cancel):
         return log
 
 
-def _transition_phases(frame_plans):
+def _transition_phases(frame_plans, *, step=1):
     # Advance for actual redraw groups, not sample numbers. This includes the
     # occasional redraw of a long still picture required by the core's drift cap.
     changes = 0
     phases = [0.0]
     for previous, current in zip(frame_plans, frame_plans[1:]):
         changes += current["note_frame"] != previous["note_frame"]
-        phases.append(1 - abs(1 - (changes / 64) % 2))
+        phases.append(1 - abs(1 - (changes * step / 64) % 2))
     return phases
 
 
 def _transition_phase_exposure(plan, refresh_period, origin):
-    """Exact worst fixed-phase cut count, plus total internal exposure time."""
-    period = float(refresh_period)
+    """Exact worst fixed-phase count, total exposure time and longest hit streak."""
+    period = Fraction(refresh_period)
+    origin = Fraction(origin)
     active = 0
+    hits = 0
+    cuts = 0
     events = []
     total = 0.0
     for previous, current in zip(plan["frames"], plan["frames"][1:]):
@@ -181,23 +184,50 @@ def _transition_phase_exposure(plan, refresh_period, origin):
                 not any("#" in row for row in previous["pattern"] + current["pattern"])):
             continue
         start, end = previous["sweep_start_ms"], current["start_ms"]
+        bit = 1 << cuts
+        index = cuts
+        cuts += 1
         duration = end - start
         total += duration
         if duration >= period:
             active += 1
+            hits |= bit
             continue
-        low = (start - float(origin)) % period
-        high = low + duration
+        # Preserve rational refresh boundaries: floating modulo can separate
+        # identical stable phases and invent a very narrow extra hit streak.
+        low = (Fraction(start) - origin) % period
+        high = low + Fraction(end) - Fraction(start)
         if high > period:
             active += 1
+            hits |= bit
             high -= period
-        events.extend(((low, 1), (high, -1)))
+        events.extend(((low, 1, index), (high, -1, index)))
     worst = active
+    longest = 0
+    # Bit i represents visible cut i. Intersecting shifted masks tests a run
+    # without scanning every cut at every phase; halving builds the full run.
+    def record_streak():
+        nonlocal longest
+        while longest < active:
+            mask, width = hits, longest + 1
+            while width > 1 and mask:
+                half = width // 2
+                mask &= mask << half
+                width -= half
+            if not mask:
+                break
+            longest += 1
+
+    record_streak()
     # Open intervals: departures precede arrivals at equal phase boundaries.
-    for _, change in sorted(events):
+    for _, change, index in sorted(events):
+        bit = 1 << index
         active += change
+        hits = hits | bit if change > 0 else hits & ~bit
         worst = max(worst, active)
-    return worst, total
+        if change > 0:
+            record_streak()
+    return worst, total, longest
 
 
 def import_video(path, *, fps=10, width=10, height=None, start_ms=2000, scroll_speed=27,
@@ -280,8 +310,16 @@ def import_video(path, *, fps=10, width=10, height=None, start_ms=2000, scroll_s
             refresh_period = period_exact / round(refresh_hz / fps)
             # Retain the existing candidate first. Reclaim unused guard time only
             # after compiling it, so tighter packing cannot undo earlier gains.
-            for actual_gap in (False, True):
-                phases = _transition_phases(plan["frames"])
+            selected_gap = False
+            worst, total, longest = _transition_phase_exposure(plan, refresh_period, origin)
+            for actual_gap, step in ((False, 1), (True, 1), (None, 9)):
+                if actual_gap is None:
+                    actual_gap = target_client == "lazer" or selected_gap
+                if step > 1 and longest <= 1:
+                    continue
+                # An odd stride visits the same 128-point triangular cycle in
+                # a different order, separating hits without a wraparound jump.
+                phases = _transition_phases(plan["frames"], step=step)
                 if target_client == "stable":
                     sweep = plan["sweep_ms"]
                     span = max(0, refresh_period - sweep - (0 if actual_gap else 1))
@@ -305,6 +343,9 @@ def import_video(path, *, fps=10, width=10, height=None, start_ms=2000, scroll_s
                                                   for i in range(1, count)] + [starts[-1]]
                 spread_windows = [(spread_starts[i], spread_starts[i + 1] - (transition if i < count - 1 else 0))
                                   for i in range(count)]
+                if step > 1 and any(abs(b - a - period) > 1 + 1e-7
+                                    for a, b in zip(spread_starts[:-2], spread_starts[1:-1])):
+                    continue
                 # Keep the original scheduling budget and minimum display time.
                 if (spread_starts == [f["start_ms"] for f in plan["frames"]] + [plan["end_ms"]] or
                         any(end - start < (1 if target_client == "stable" else 1e-7)
@@ -316,14 +357,18 @@ def import_video(path, *, fps=10, width=10, height=None, start_ms=2000, scroll_s
                                            merge_holds=merge_holds, target_client=target_client)
                 # Moving windows may change reuse groups and hence actual sweep
                 # lengths. Validate the recompiled cuts, not just the old estimate.
-                if actual_gap and any(a["note_frame"] != b["note_frame"] and
-                                      a["sweep_start_ms"] <= float(origin + i * period_exact - refresh_period) + 1e-7
-                                      for i, (a, b) in enumerate(zip(candidate["frames"], candidate["frames"][1:]), 1)):
+                if (actual_gap or step > 1) and any(
+                        a["note_frame"] != b["note_frame"] and
+                        a["sweep_start_ms"] <= float(origin + i * period_exact - refresh_period) + 1e-7
+                        for i, (a, b) in enumerate(zip(candidate["frames"], candidate["frames"][1:]), 1)):
                     continue
-                worst, total = _transition_phase_exposure(plan, refresh_period, origin)
-                new_worst, new_total = _transition_phase_exposure(candidate, refresh_period, origin)
-                if new_worst < worst and new_total <= total + 1e-7 and len(candidate["notes"]) <= len(plan["notes"]):
+                new_worst, new_total, new_longest = _transition_phase_exposure(candidate, refresh_period, origin)
+                improves = (new_worst < worst if step == 1 else
+                            new_worst <= worst and new_longest < longest)
+                if improves and new_total <= total + 1e-7 and len(candidate["notes"]) <= len(plan["notes"]):
                     plan = candidate
+                    selected_gap = actual_gap
+                    worst, total, longest = new_worst, new_total, new_longest
         audio_data = None
         if re.search(r"^\s*Stream #0:\d+.*Audio:", log, re.MULTILINE):
             report("正在提取音乐并对齐视频开始时间…（可取消）")

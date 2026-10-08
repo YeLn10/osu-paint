@@ -1,7 +1,9 @@
 """Unknown display phases must not repeatedly catch the same visible cuts."""
 
 import math
+from fractions import Fraction
 from pathlib import Path
+import random
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -39,7 +41,96 @@ def phase_counts(plan, *, samples=400, include_redraws=False):
     return counts, cuts
 
 
+def phase_streak(plan, period, origin):
+    """Independent exhaustive scan of the intervals between phase endpoints."""
+    cuts = [(Fraction(a['sweep_start_ms']), Fraction(b['start_ms']))
+            for a, b in zip(plan['frames'], plan['frames'][1:])
+            if a['note_frame'] != b['note_frame'] and
+            any('#' in row for row in a['pattern'] + b['pattern'])]
+    period, origin = Fraction(period), Fraction(origin)
+    edges = sorted({Fraction(0), period, *((t - origin) % period for cut in cuts for t in cut)})
+    longest = 0
+    for low, high in zip(edges, edges[1:]):
+        offset = origin + (low + high) / 2
+        run = 0
+        for start, end in cuts:
+            hit = math.floor((start - offset) / period) + 1 < (end - offset) / period
+            run = run + 1 if hit else 0
+            longest = max(longest, run)
+    return longest
+
+
 class GhostPhaseTests(unittest.TestCase):
+    def test_phase_streak_matches_exhaustive_intervals(self):
+        from osu_paint_video import _transition_phase_exposure
+        rng = random.Random(20261008)
+        for period in (10, Fraction(25, 3), Fraction(125, 18)):
+            for case in range(20):
+                intervals = [(i * 30 + rng.randrange(10), i * 30 + 10 + rng.randrange(15))
+                             for i in range(12)]
+                frames = [dict(note_frame=i, pattern=['#'], start_ms=0 if i == 0 else intervals[i - 1][1],
+                               sweep_start_ms=start) for i, (start, _) in enumerate(intervals)]
+                frames.append(dict(note_frame=len(intervals), pattern=['#'], start_ms=intervals[-1][1]))
+                plan = dict(frames=frames)
+                with self.subTest(period=period, case=case):
+                    self.assertEqual(_transition_phase_exposure(plan, period, Fraction(3, 5))[2],
+                                     phase_streak(plan, period, Fraction(3, 5)))
+
+    def test_faster_walk_rejects_more_hits_even_when_streak_is_shorter(self):
+        from osu_paint_video import compile_frames, _transition_phase_exposure, _transition_phases
+        baseline = video_sequence('stable', hz=60)
+        compiled = []
+        def record(*args, **kwargs):
+            plan = compile_frames(*args, **kwargs)
+            compiled.append(plan)
+            return plan
+        with patch('osu_paint_video.compile_frames', side_effect=record), \
+                patch('osu_paint_video._transition_phases', side_effect=lambda frames, step:
+                      _transition_phases(frames, step=2 if step == 9 else step)):
+            result = video_sequence('stable', hz=60)
+        old = _transition_phase_exposure(baseline, Fraction(50, 3), 2000)
+        new = _transition_phase_exposure(compiled[-1], Fraction(50, 3), 2000)
+        self.assertEqual(len(compiled), 4)
+        self.assertGreater(new[0], old[0])
+        self.assertLess(new[2], old[2])
+        self.assertEqual(encode_osu(result), encode_osu(baseline))
+
+    def test_faster_walk_rejects_large_frame_interval_changes(self):
+        from osu_paint_video import compile_frames, _transition_phases
+        with patch('osu_paint_video._transition_phases', side_effect=lambda frames, step:
+                   _transition_phases(frames)):
+            baseline = video_sequence('lazer', hz=480)
+        with patch('osu_paint_video.compile_frames', wraps=compile_frames) as compile_call, \
+                patch('osu_paint_video._transition_phases', side_effect=lambda frames, step:
+                      [i % 2 for i in range(len(frames))] if step == 9 else _transition_phases(frames)):
+            result = video_sequence('lazer', hz=480)
+        self.assertEqual(compile_call.call_count, 2)
+        self.assertEqual(encode_osu(result), encode_osu(baseline))
+
+    def test_short_lazer_sequence_breaks_consecutive_transition_hits(self):
+        plan = video_sequence('lazer', hz=1000, changes=3)
+        self.assertLessEqual(phase_streak(plan, 1, 2000), 2)
+
+    def test_faster_phase_walk_reduces_streaks_without_more_exposure(self):
+        from osu_paint_video import _transition_phase_exposure
+        for client, hz, worst_limit, streak_limit, total in (
+                ('lazer', 480, 3, 2, 64 * .612 * 500 / 4900),
+                ('lazer', 1000, 5, 2, 64 * .612 * 500 / 4900),
+                ('stable', 120, 40, 9, 192),
+                ('stable', 144, 59, 20, 192)):
+            with self.subTest(client=client, hz=hz):
+                plan = video_sequence(client, hz=hz)
+                refresh_period = Fraction(1000, hz)
+                score = _transition_phase_exposure(plan, refresh_period, 2000)
+                self.assertLessEqual(score[0], worst_limit)
+                self.assertAlmostEqual(score[1], total, places=6)
+                self.assertLessEqual(phase_streak(plan, refresh_period, 2000), streak_limit)
+                self.assertEqual(score[2], phase_streak(plan, refresh_period, 2000))
+                self.assertEqual(len(plan['notes']), 65)
+                period = 1000 / plan['video']['fps']
+                self.assertTrue(all(abs(b['start_ms'] - a['start_ms'] - period) <= 1 + 1e-7
+                                    for a, b in zip(plan['frames'], plan['frames'][1:])))
+
     def test_stable_short_hold_sweeps_do_not_lock_to_one_display_phase(self):
         plan = video_sequence('stable')
         counts, cuts = phase_counts(plan)
@@ -50,7 +141,7 @@ class GhostPhaseTests(unittest.TestCase):
         for hz, limit in ((240, 1), (360, 2), (480, 3), (1000, 5)):
             with self.subTest(hz=hz):
                 plan = video_sequence('lazer', hz=hz)
-                worst, total = _transition_phase_exposure(plan, 1000 / hz, 2000)
+                worst, total, _ = _transition_phase_exposure(plan, Fraction(1000, hz), 2000)
                 self.assertLessEqual(worst, limit)
                 self.assertAlmostEqual(total, 64 * .612 * 500 / 4900, places=6)
                 self.assertEqual(len(plan['notes']), 65)
@@ -61,7 +152,7 @@ class GhostPhaseTests(unittest.TestCase):
         for hz, limit in ((60, 15), (120, 40), (144, 59), (165, 64)):
             with self.subTest(hz=hz):
                 plan = video_sequence('stable', hz=hz)
-                worst, total = _transition_phase_exposure(plan, 1000 / hz, 2000)
+                worst, total, _ = _transition_phase_exposure(plan, Fraction(1000, hz), 2000)
                 self.assertLessEqual(worst, limit)
                 self.assertEqual(total, 192)
                 self.assertEqual(len(plan['notes']), 65)
@@ -78,24 +169,28 @@ class GhostPhaseTests(unittest.TestCase):
             return plan
         with patch('osu_paint_video.compile_frames', side_effect=compile_with_stale_estimate):
             result = video_sequence('lazer', hz=1000)
-        self.assertEqual(len(compiled), 2)
-        baseline, candidate = compiled
+        self.assertEqual(len(compiled), 3)
+        baseline, candidate, faster = compiled
         old_score = _transition_phase_exposure(baseline, 1, 2000)
         new_score = _transition_phase_exposure(candidate, 1, 2000)
         self.assertLess(new_score[0], old_score[0])
         self.assertLessEqual(new_score[1], old_score[1] + 1e-7)
         self.assertTrue(any(a['sweep_start_ms'] <= 2000 + i * 50 - 1
                             for i, a in enumerate(candidate['frames'][:-1], 1)))
+        self.assertTrue(any(a['sweep_start_ms'] <= 2000 + i * 50 - 1
+                            for i, a in enumerate(faster['frames'][:-1], 1)))
         self.assertEqual(encode_osu(result), encode_osu(baseline))
 
     def test_tighter_gap_preserves_a_better_existing_stable_candidate(self):
-        from osu_paint_video import compile_frames, _transition_phase_exposure
+        from osu_paint_video import compile_frames, _transition_phase_exposure, _transition_phases
         compiled = []
         def record_compile(*args, **kwargs):
             plan = compile_frames(*args, **kwargs)
             compiled.append(plan)
             return plan
-        with patch('osu_paint_video.compile_frames', side_effect=record_compile):
+        with patch('osu_paint_video.compile_frames', side_effect=record_compile), \
+                patch('osu_paint_video._transition_phases',
+                      side_effect=lambda frames, **kwargs: _transition_phases(frames)):
             result = video_sequence('stable', hz=144)
         self.assertEqual(len(compiled), 3)
         _, previous, tighter = compiled
@@ -117,7 +212,10 @@ class GhostPhaseTests(unittest.TestCase):
             for hz in rates:
                 for merged in (False, True):
                     with self.subTest(client=client, hz=hz, merged=merged):
-                        plan = video_sequence(client, changes=12, repeat=2, hz=hz, height=3,
+                        accelerated = merged and ((client == 'lazer' and hz in (480, 1000)) or
+                                                  (client == 'stable' and hz in (120, 144)))
+                        repeat = 1 if accelerated else 2
+                        plan = video_sequence(client, changes=64 if accelerated else 12, repeat=repeat, hz=hz, height=3,
                                               merged=merged, origin=2000.6)
                         points, _ = decoder(encode_osu(plan))
                         objects = [line.split(',') for line in encode_osu(plan).split('[HitObjects]\n')[1].splitlines() if line]
@@ -133,10 +231,10 @@ class GhostPhaseTests(unittest.TestCase):
                         divisor = round(hz / plan['video']['fps'])
                         for tick in range(1, (len(plan['frames']) - 1) * divisor):
                             nominal = 2000.6 + tick * 1000 / hz
-                            self.assertEqual(visible(nominal), {tick // divisor // 2 % 2}, (tick, nominal))
+                            self.assertEqual(visible(nominal), {tick // divisor // repeat % 2}, (tick, nominal))
                         # The renderer can still sample both pictures during a
                         # finite sweep. Keep this counterexample, not a zero-ghost claim.
-                        before, after = plan['frames'][1:3]
+                        before, after = plan['frames'][repeat - 1:repeat + 1]
                         self.assertTrue(any(len(visible(before['sweep_start_ms'] +
                                             (after['start_ms'] - before['sweep_start_ms']) * i / 50)) == 2
                                             for i in range(1, 50)))
@@ -191,9 +289,11 @@ class GhostPhaseTests(unittest.TestCase):
 
     def test_exact_phase_score_handles_wraparound_ties_and_long_sweeps(self):
         from osu_paint_video import _transition_phase_exposure
-        for intervals, expected in (([(9, 11), (19.5, 22)], (2, 4.5)),
-                                    ([(1, 2), (12, 13)], (1, 2)),
-                                    ([(0, 12), (25, 26)], (2, 13))):
+        for intervals, expected in (([(9, 11), (19.5, 22)], (2, 4.5, 2)),
+                                    ([(1, 2), (12, 13)], (1, 2, 1)),
+                                    ([(0, 12), (25, 26)], (2, 13, 2)),
+                                    ([(1, 2), (13, 14), (21, 22)], (2, 3, 1)),
+                                    ([(0, 10), (10, 20)], (2, 20, 2))):
             with self.subTest(intervals=intervals):
                 frames = [dict(note_frame=i, pattern=["#"], start_ms=0 if i == 0 else intervals[i - 1][1], sweep_start_ms=start)
                           for i, (start, _) in enumerate(intervals)]
@@ -204,7 +304,7 @@ class GhostPhaseTests(unittest.TestCase):
         for hz in (60, 120, 165):
             with self.subTest(hz=hz):
                 plan = video_sequence('lazer', repeat=2048, changes=1, hz=hz)
-                with patch('osu_paint_video._transition_phases', side_effect=lambda frames:
+                with patch('osu_paint_video._transition_phases', side_effect=lambda frames, **kwargs:
                            [1 - abs(1 - (i / 64) % 2) for i in range(len(frames))]):
                     baseline = video_sequence('lazer', repeat=2048, changes=1, hz=hz)
                 self.assertEqual(encode_osu(plan), encode_osu(baseline))
@@ -214,4 +314,4 @@ class GhostPhaseTests(unittest.TestCase):
         plan = dict(frames=[dict(note_frame=0, pattern=["."], start_ms=0, sweep_start_ms=8),
                             dict(note_frame=1, pattern=["."], start_ms=11, sweep_start_ms=18),
                             dict(note_frame=2, pattern=["#"], start_ms=21)])
-        self.assertEqual(_transition_phase_exposure(plan, 10, 0), (1, 3))
+        self.assertEqual(_transition_phase_exposure(plan, 10, 0), (1, 3, 1))
