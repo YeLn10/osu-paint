@@ -40,7 +40,7 @@ class StableSweepPhaseTests(unittest.TestCase):
         self.assertLessEqual(worst, 54)
         self.assertLessEqual(longest, 53)
 
-    def test_serialized_sweeps_break_repeated_white_ribbons_but_do_not_remove_them(self):
+    def test_serialized_sweeps_do_not_split_a_common_black_column(self):
         plan = dense_video()
         text = encode_osu(plan)
         points, _ = decode(text)
@@ -62,8 +62,7 @@ class StableSweepPhaseTests(unittest.TestCase):
                            for head, tail in endpoints
                            if min(1, 1 - head + current) > max(0, 1 - tail + current - 1 / 12))
             ribbons += any(b[0] - a[1] > .5 / 768 for a, b in zip(spans, spans[1:]))
-        self.assertGreater(ribbons, 0, "Unknown display phase can still expose a white ribbon")
-        self.assertLessEqual(ribbons, 13)
+        self.assertEqual(ribbons, 0)
 
     def test_lead_is_bounded_and_audio_duration_rows_and_cadence_are_preserved(self):
         for hz in (60, 60000 / 1001):

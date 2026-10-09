@@ -12,7 +12,7 @@ from pathlib import Path
 import wave
 import zipfile
 
-from osu_paint_skin import DEFAULT_ASPECT_RATIO, build_skins, column_width, skin_filename
+from osu_paint_skin import DEFAULT_ASPECT_RATIO, STABLE_BOTTOM_MASK_HEIGHT, build_skins, column_width, skin_filename
 
 
 SUPPORTED_KEY_COUNTS = tuple(range(1, 19))
@@ -473,6 +473,12 @@ def _compile_lazer_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, t
 def _compile_stable_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, transition_ms=12,
                    *, frame_times=None, fast_clear=False, allow_empty_frames=False, merge_holds=False):
     height = len(frames[0])
+    bottom_mask = STABLE_BOTTOM_MASK_HEIGHT / 480
+    # Pack pictures without a moving white seam. The fixed skin foreground masks
+    # the outgoing inset; keep a float32 guard and positive travel after the top
+    # endpoint even for rows smaller than that inset.
+    sweep_height = max(1 - bottom_mask + 1 / PLAYFIELD_HEIGHT + 1e-6,
+                       1 + 1 / PLAYFIELD_HEIGHT - .5 / height)
     minimum = minimum_transition_ms(scroll_speed, height, target_client="stable")
     if not math.isfinite(transition_ms) or transition_ms <= 0:
         raise ValueError("切帧时长必须是大于 0 的有限数值。")
@@ -537,7 +543,7 @@ def _compile_stable_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, 
 
     entry_ms = 1 if fast_clear else transition_ms
     sweep_ms = entry_ms
-    entry_beat = reference_beat * entry_ms / (SWEEP_HEIGHT * time_range)
+    entry_beat = reference_beat * entry_ms / (sweep_height * time_range)
     add_point(start_ms - entry_ms, entry_beat)
     frame_plans = [dict(pattern=rows, start_ms=start, end_ms=end, note_frame=first)
                    for rows, (start, end), first in zip(frames, windows, note_frames)]
@@ -563,7 +569,7 @@ def _compile_stable_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, 
         stamps = [sweep_start + round((i + 1) * duration / (len(used_rows) + 1)) for i in range(len(used_rows))]
         row_times[first] = dict(zip(used_rows, stamps))
         times = [sweep_start, *stamps, sweep_end]
-        distances = [0, *(1 / PLAYFIELD_HEIGHT + (height - 1 - row) / height for row in used_rows), SWEEP_HEIGHT]
+        distances = [0, *(1 / PLAYFIELD_HEIGHT + (height - 1 - row) / height for row in used_rows), sweep_height]
         for t0, t1, d0, d1 in zip(times, times[1:], distances, distances[1:]):
             add_point(t0, reference_beat * (t1 - t0) / ((d1 - d0) * time_range))
         if not shared_sweep:
@@ -582,7 +588,9 @@ def _compile_stable_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, 
         has_notes = any("#" in row for row in frames[index])
         drift = ((timeline.position(frame["end_ms"]) - timeline.position(windows[first][0])) / time_range
                  if has_notes else 0)
-        if drift >= min(.5 / height, .5 / PLAYFIELD_HEIGHT):
+        held_drift = ((timeline.position(frame["sweep_start_ms"]) - timeline.position(windows[first][0])) / time_range
+                      if has_notes else 0)
+        if max(drift, held_drift) >= min(.5 / height, .5 / PLAYFIELD_HEIGHT):
             raise ValueError("展示时间过长，图案会接近判定线；请缩短时间范围。")
         frame["drift_playfield_fraction"] = drift
         frame["drift_at_768px"] = drift * PLAYFIELD_HEIGHT
@@ -609,6 +617,7 @@ def _compile_stable_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, 
         "pattern": frames[0], "frames": frame_plans, "keys": len(frames[0][0]),
         "screen_aspect_ratio": DEFAULT_ASPECT_RATIO,
         "stage_width_fraction": column_width(len(frames[0][0]), target_client="stable") * len(frames[0][0]) / (480 * DEFAULT_ASPECT_RATIO),
+        "bottom_mask_fraction": bottom_mask,
         "start_ms": start_ms, "end_ms": end_ms,
         "transition_ms": transition_ms, "sweep_ms": sweep_ms, "scroll_speed": scroll_speed,
         "requested_transition_ms": requested_transition, "fast_clear": fast_clear,
@@ -681,12 +690,12 @@ const maxNoteSpan=notePositions.reduce((span,start,i)=>Math.max(span,noteEndPosi
 function lowerBound(a,x){let lo=0,hi=a.length;while(lo<hi){let m=(lo+hi)>>>1;if(a[m]<x)lo=m+1;else hi=m;}return lo;}
 seek.min=plan.start_ms-plan.transition_ms-40;seek.max=plan.end_ms+plan.transition_ms+40;seek.value=plan.start_ms;
 document.getElementById('info').textContent=`${plan.keys}K · ${plan.frames.length} 帧 · 滚速 ${plan.scroll_speed} · ${plan.start_ms}–${plan.end_ms} ms；单帧最大漂移约 ${plan.drift_at_768px.toFixed(4)} px（768 px 高度）。`;
-function draw(){let t=+seek.value,h=canvas.height,w=canvas.width*(plan.stage_width_fraction??1)/plan.keys,size=h/plan.pattern.length;
+function draw(){let t=+seek.value,h=canvas.height,w=canvas.width*(plan.stage_width_fraction??1)/plan.keys,size=h/plan.pattern.length,clip=h*(1-(plan.bottom_mask_fraction??0));
 ctx.clearRect(0,0,canvas.width,h);ctx.fillStyle='white';ctx.fillRect(0,0,w*plan.keys,h);
 const current=position(t),lower=current-size/h*plan.time_range_ms-maxNoteSpan,upper=current+plan.time_range_ms;
 ctx.fillStyle='black';for(let i=lowerBound(notePositions,lower);i<plan.notes.length&&notePositions[i]<=upper;i++){
 const n=plan.notes[i],y=(1-(notePositions[i]-current)/plan.time_range_ms)*h,tailY=(1-(noteEndPositions[i]-current)/plan.time_range_ms)*h;
-if(y>0&&tailY<h+size){const top=Math.max(0,tailY-size);ctx.fillRect(n.column*w,top,w,Math.min(h,y)-top);}}
+if(y>0&&tailY<clip+size){const top=Math.max(0,tailY-size);ctx.fillRect(n.column*w,top,w,Math.min(clip,y)-top);}}
 const index=plan.frames.findIndex((f,i)=>t>=f.start_ms&&(t<=Math.max(f.end_ms,f.sweep_start_ms??f.end_ms)||
     (i+1<plan.frames.length&&t<plan.frames[i+1].start_ms&&f.note_frame!==undefined&&f.note_frame===plan.frames[i+1].note_frame)));
 document.getElementById('pattern').textContent=index<0?'空档 / 进场 / 换帧 / 退场':plan.frames[index].pattern.join('\\n');

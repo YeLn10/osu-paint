@@ -22,7 +22,11 @@ class FreeTransitionTests(unittest.TestCase):
                     self.assertEqual(plan["frames"][0]["exit_end_ms"], 2220)
                     points, _ = decode(encode_osu(plan))
                     movement = position(points, 2220, plan["time_range_ms"]) - position(points, 2220-duration, plan["time_range_ms"])
-                    self.assertAlmostEqual(movement, SWEEP_HEIGHT, delta=1e-5)
+                    if client == "stable":
+                        self.assertLess(movement, 1, "Overlap pictures instead of leaving a moving seam")
+                        self.assertGreaterEqual(movement - 1 / 768, 1 - plan["bottom_mask_fraction"])
+                    else:
+                        self.assertAlmostEqual(movement, SWEEP_HEIGHT, delta=1e-5)
                     positions.append(position(points, 2210, plan["time_range_ms"]) - position(points, 2200, plan["time_range_ms"]))
             if len(positions) == 2:
                 self.assertNotAlmostEqual(*positions, places=3)

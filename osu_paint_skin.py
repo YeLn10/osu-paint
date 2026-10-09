@@ -1,12 +1,14 @@
 """Build full-height Pixel Film skins for 1–18K and common display ratios."""
 
 from pathlib import Path
+import math
 import struct
 import zipfile
 import zlib
 
 
 DEFAULT_ASPECT_RATIO = 16 / 10
+STABLE_BOTTOM_MASK_HEIGHT = 1  # Skin coordinates; StageBottom is drawn over notes.
 SKIN_PROFILES = {
     "pixel-film-16x10.osk": (DEFAULT_ASPECT_RATIO, "16:10"),
     "pixel-film-16x9.osk": (16 / 9, "16:9"),
@@ -47,7 +49,8 @@ def skin_ini(*, rows=24, aspect_ratio=DEFAULT_ASPECT_RATIO, label="16:10", targe
             "ColourColumnLine: 255,255,255,0", "JudgementLine: 0",
             "ScorePosition: 1000", "ComboPosition: 1000",
             f"WidthForNoteHeightScale: {note_height}", "UpsideDown: 0", "NoteBodyStyle: 0",
-            "StageLeft: blank", "StageRight: blank", "StageBottom: blank", "StageHint: blank",
+            "StageLeft: blank", "StageRight: blank",
+            f"StageBottom: {'pixel-bottom-' + str(keys) if target_client == 'stable' else 'blank'}", "StageHint: blank",
             "LightingN: blank", "LightingL: blank", "StageLight: blank",
             *(["WarningArrow: blank", "Hit0: blank", "Hit50: blank", "Hit100: blank",
                "Hit200: blank", "Hit300: blank", "Hit300g: blank"] if target_client == "stable" else []),
@@ -84,6 +87,12 @@ def build_skin(path, *, rows=24, aspect_ratio=DEFAULT_ASPECT_RATIO, label="16:10
         # creating a grey gradient when linear filtering stretches the body.
         "pixel-body.png": solid_png(40, 1024, (0, 0, 0, 255)),
     }
+    if target_client == "stable":
+        # Stable anchors this foreground image at the stage bottom and does not
+        # stretch its width. Cover each actual stage, including capped low K.
+        for keys in range(1, 19):
+            width = math.ceil(column_width(keys, aspect_ratio, target_client="stable") * keys)
+            files[f"pixel-bottom-{keys}.png"] = solid_png(width, STABLE_BOTTOM_MASK_HEIGHT, (255, 255, 255, 255))
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for name, data in files.items():
             # Fixed metadata makes the versioned delivery reproducible.

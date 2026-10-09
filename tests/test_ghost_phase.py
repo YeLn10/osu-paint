@@ -252,7 +252,8 @@ class GhostPhaseTests(unittest.TestCase):
                         def visible(now):
                             at = position(points, now, plan['time_range_ms'])
                             return {col for col, head, tail in endpoints
-                                    if min(1, 1 - head + at) - max(0, 1 - tail + at - 1 / 3) > 1e-6}
+                                    if min(1 - plan.get('bottom_mask_fraction', 0), 1 - head + at)
+                                    - max(0, 1 - tail + at - 1 / 3) > 1e-6}
                         divisor = round(hz / plan['video']['fps'])
                         for tick in range(1, (len(plan['frames']) - 1) * divisor):
                             nominal = 2000.6 + tick * 1000 / hz

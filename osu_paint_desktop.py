@@ -1030,6 +1030,7 @@ class PaintApp:
         stage_w = full_w * self.plan.get("stage_width_fraction", 1)
         left, top = (width - full_w) / 2, 10 * self.scale
         note_height = stage_h / len(self.plan["pattern"])
+        clip_h = full_h * (1 - self.plan.get("bottom_mask_fraction", 0))
         lane = stage_w / self.plan["keys"]
         current = self.seek_time.get()
         position = self.timeline.position(current)
@@ -1044,10 +1045,10 @@ class PaintApp:
             y = (1 - (distance - position) / self.plan["time_range_ms"]) * stage_h
             tail_y = (1 - (self.note_end_distances[index] - position) / self.plan["time_range_ms"]) * stage_h
             # Keep drawing the body below judgement until the tail is off stage.
-            if y > 0 and tail_y < full_h + note_height:
+            if y > 0 and tail_y < clip_h + note_height:
                 x = left + note["column"] * lane
                 self.preview.create_rectangle(x, max(top, top + tail_y - note_height), x + lane,
-                                              min(top + full_h, top + y),
+                                              min(top + clip_h, top + y),
                                               fill="black", outline="",
                                               tags=("note", "hold") if "end_time_ms" in note else "note")
         index = bisect_right(self.frame_starts, current) - 1

@@ -62,6 +62,30 @@ class DesktopClientTests(unittest.TestCase):
             self.app.load_project(invalid)
         self.assertEqual(self.app._project_data(), before)
 
+    def test_stable_preview_masks_the_bottom_and_clears_the_outgoing_column(self):
+        self.root.deiconify()
+        self.root.update()
+        plan = compile_frames([["##"] * 12, ["#."] * 12],
+                              frame_times=[(2000, 2040), (2053, 2200)],
+                              fast_clear=True, merge_holds=True, target_client="stable")
+        self.app._refresh_preview(compiled_plan=plan)
+        height = min(self.app.preview.winfo_height() - 34 * self.app.scale,
+                     (self.app.preview.winfo_width() - 24 * self.app.scale) / 1.6)
+        top = 10 * self.app.scale
+        left = (self.app.preview.winfo_width() - height * 1.6) / 2
+        bottom = top + height * 479 / 480
+        for now in (2000, 2051.5, 2053, 2100):
+            self.app.seek_time.set(now)
+            self.app._draw_preview()
+            cells = [self.app.preview.coords(item) for item in self.app.preview.find_withtag("note")]
+            self.assertTrue(cells)
+            for x1, y1, x2, y2 in cells:
+                self.assertLess(y1, y2)
+                self.assertLessEqual(y2, bottom + 1e-8)
+                if now >= 2053:
+                    self.assertAlmostEqual(x1, left)
+            self.assertAlmostEqual(max(cell[3] for cell in cells), bottom)
+
     def test_export_keeps_clicked_client_while_editor_switches(self):
         entered, release = threading.Event(), threading.Event()
         captured = []

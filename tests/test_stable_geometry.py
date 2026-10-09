@@ -90,7 +90,7 @@ class StableGeometryTests(unittest.TestCase):
                                 tail = float(fields[5].split(":")[0]) if fields[3] == "128" else head
                                 bottom = 1 - position(points, head, plan["time_range_ms"]) + current
                                 top = 1 - position(points, tail, plan["time_range_ms"]) + current - 1 / 12
-                                if min(1, bottom) - max(0, top) > 1e-6:
+                                if min(1 - plan["bottom_mask_fraction"], bottom) - max(0, top) > 1e-6:
                                     visible_columns.add(int(fields[0]) // 256)
                             self.assertEqual(visible_columns, {(tick // 2) % 2}, (tick, now))
 

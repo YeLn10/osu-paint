@@ -106,7 +106,7 @@ class TransitionOptimizationTests(unittest.TestCase):
             for note in plan["notes"]:
                 bottom = 1 - stable_position(points, note["time_ms"], plan["time_range_ms"]) + current
                 top = 1 - stable_position(points, note.get("end_time_ms", note["time_ms"]), plan["time_range_ms"]) + current - 1 / 24
-                if min(1, bottom) - max(0, top) > 1e-6:
+                if min(1 - plan["bottom_mask_fraction"], bottom) - max(0, top) > 1e-6:
                     visible.add(note["frame"])
             self.assertEqual(visible, {i} if i != 2 else set())
         self.assertEqual([f["exit_end_ms"] - f["sweep_start_ms"] for f in plan["frames"]], [3, 2, 1, 5])

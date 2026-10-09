@@ -125,6 +125,31 @@ for(let col=0;col<KEYS;col++){
                               + position(points, 2000, plan["time_range_ms"]))
                     self.assertAlmostEqual(actual, expected, delta=1e-6)
 
+    @unittest.skipUnless(shutil.which("node"), "Node.js unavailable; HTML geometry check skipped")
+    def test_stable_html_masks_the_bottom_and_clears_the_outgoing_column(self):
+        plan = compile_frames([["##"] * 12, ["#."] * 12],
+                              frame_times=[(2000, 2040), (2053, 2200)],
+                              fast_clear=True, merge_holds=True, target_client="stable")
+        script = make_preview(plan).split("<script>")[1].split("</script>")[0]
+        harness = r"""
+const vm=require('node:vm'),assert=require('node:assert/strict'),rects=[];
+const ctx={clearRect(){rects.length=0;},fillRect(x,y,w,h){if(this.fillStyle==='black')rects.push([x,y,w,h]);}};
+const elements={view:{height:600,getContext:()=>ctx},seek:{},time:{},info:{},pattern:{},play:{}};
+const sandbox=vm.createContext({document:{getElementById:id=>elements[id]},requestAnimationFrame(){},performance:{now:()=>0}});
+vm.runInContext(SCRIPT,sandbox);
+for(const t of [2000,2051.5,2053,2100]){
+    vm.runInContext('seek.value='+t+';draw()',sandbox);
+    assert.ok(rects.length);
+    for(const [x,y,w,h] of rects){assert.ok(y>=0 && h>0);assert.ok(y+h<=600*479/480+1e-8);}
+    if(t>=2053)assert.ok(rects.every(r=>r[0]===0),'The outgoing second column is still visible');
+    assert.ok(Math.abs(Math.max(...rects.map(r=>r[1]+r[3]))-600*479/480)<1e-5);
+}
+""".replace("SCRIPT", json.dumps(script))
+        result = subprocess.run([shutil.which("node"), "-"], input=harness, text=True,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8",
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_exported_skins_match_the_actual_row_count(self):
         for height in (1, 3, 13, 24, 128):
             with self.subTest(height=height), tempfile.TemporaryDirectory() as directory:
