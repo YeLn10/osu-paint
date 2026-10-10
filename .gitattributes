@@ -1,0 +1,2 @@
+# Preserve upstream license files, including their original whitespace.
+licenses/*.txt -text -whitespace

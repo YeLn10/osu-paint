@@ -1,0 +1,84 @@
+name: Windows build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    env:
+      PYTHONUTF8: '1'
+      PYGAME_HIDE_SUPPORT_PROMPT: '1'
+      SDL_AUDIODRIVER: dummy
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11.9'
+          architecture: x64
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Install dependencies
+        run: |
+          python -m venv .build-env
+          .\.build-env\Scripts\python.exe -m pip install -r requirements.txt
+      - name: Run full test suite
+        run: .\.build-env\Scripts\python.exe -m unittest discover -s tests -v
+      - name: Build desktop app
+        run: .\build_desktop.ps1
+      - name: Verify packaged modules and media components
+        run: .\.build-env\Scripts\python.exe tools/verify_package.py
+      - name: Package release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: .\.build-env\Scripts\python.exe tools/package_release.py --version "$env:RELEASE_VERSION"
+      - name: Upload release files
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-files
+          path: dist/release/${{ github.ref_name }}/*
+          if-no-files-found: error
+          compression-level: 0
+      - name: Upload development build
+        if: "!startsWith(github.ref, 'refs/tags/v')"
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-x64
+          path: dist/osu-paint.exe
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_VERSION: ${{ github.ref_name }}
+    steps:
+      - name: Download tested release files
+        run: gh run download "$GITHUB_RUN_ID" --name release-files --dir release
+      - name: Publish release
+        run: |
+          gh release create "$RELEASE_VERSION" release/*.zip release/SHA256SUMS.txt release/build-info.json \
+            --verify-tag --title "osu-paint $RELEASE_VERSION" --notes-file release/release-notes.md --latest

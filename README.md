@@ -1,6 +1,18 @@
 # osu-paint
 
+[![Windows build](https://github.com/YeLn10/osu-paint/actions/workflows/windows.yml/badge.svg)](https://github.com/YeLn10/osu-paint/actions/workflows/windows.yml)
+[![Release](https://img.shields.io/github/v/release/YeLn10/osu-paint)](https://github.com/YeLn10/osu-paint/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 把 `#` / `.` 文本像素图或视频变成 osu!lazer / stable mania 音符图案、多帧动画。两个工具现已合并为同一个应用，视频的音乐会打包进谱面。在指定毫秒区间展示，通过快速滚动进场、切帧和退场。展示阶段是**近似停止**，不是精确零速。
+
+**[下载 Windows x64 版](https://github.com/YeLn10/osu-paint/releases/latest)** · [源码构建教程](docs/building.md) · [更新日志](CHANGELOG.md) · [维护者发布指南](docs/releasing.md)
+
+下载 Release 中的 `osu-paint-v版本-windows-x64.zip`，解压运行 `osu-paint.exe`；GitHub 的绿色 **Code → Download ZIP** 下载的是源码。Release 另有两端皮肤包、源码快照和 SHA-256 校验文件。无需安装 osu! 插件或修改游戏。
+
+![桌面编辑器](docs/desktop.png)
+
+项目自有代码采用 [MIT](LICENSE) 授权；桌面包内音视频组件保留各自许可证，见 [第三方说明](THIRD_PARTY_NOTICES.md)。
 
 ## 桌面端（Windows）
 
