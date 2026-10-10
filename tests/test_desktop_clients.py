@@ -176,21 +176,23 @@ class DesktopClientTests(unittest.TestCase):
         self.app._refresh_preview()
         self.assertEqual(self.app.entries["transition_ms"].get(), f"{self.app.plan['sweep_ms']:.3f}")
 
-    def test_free_mode_entry_edits_change_real_sweep_and_keep_frame_times(self):
+    def test_free_mode_automates_sweep_and_preserves_saved_manual_value(self):
         project = self.app._project_data()
         project.update(frames=[["#."] * 3, [".#"] * 3], frame_times=[["2000", "2200"], ["2220", "2400"]],
                        timing_mode="自由模式", fast_clear=False)
         self.app.load_project(project)
         self.app._refresh_preview()
-        self.assertEqual(self.app.plan["frames"][0]["sweep_start_ms"], 2208)
+        self.assertTrue(self.app.plan["fast_clear"])
+        sweep_start = self.app.plan["frames"][0]["sweep_start_ms"]
         before = copy.deepcopy(self.app.frame_times)
         entry = self.app.entries["transition_ms"]
         entry.delete(0, "end")
         entry.insert(0, "16")
         self.app._refresh_preview()
-        self.assertEqual(self.app.plan["frames"][0]["sweep_start_ms"], 2204)
+        self.assertEqual(self.app.plan["frames"][0]["sweep_start_ms"], sweep_start)
         self.assertEqual(self.app.frame_times, before)
-        self.assertEqual(self.app._project_data()["settings"]["transition_ms"], "16")
+        self.assertEqual(self.app._project_data()["settings"]["transition_ms"], "12")
+        self.assertEqual(str(entry["state"]), "disabled")
 
     def test_explicit_default_sized_height_is_not_silently_reduced(self):
         self.open_video_dialog()

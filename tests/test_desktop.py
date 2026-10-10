@@ -230,12 +230,12 @@ class DesktopTests(unittest.TestCase):
                         self.assertGreaterEqual(top + height - edge, height / 768 - 1e-5)
                         self.assertLess(top + height - edge, 2 * height / 768)
 
-    def test_empty_frame_is_editable_but_not_exportable(self):
+    def test_empty_frame_is_editable_and_exportable_with_other_lit_frames(self):
         self.app.add_frame()
         self.assertEqual(self.app.frames[1], ["......."] * 6)
         self.app._refresh_preview()
-        self.assertIsNone(self.app.plan)
-        self.assertEqual(str(self.app.export_button["state"]), "disabled")
+        self.assertIsNotNone(self.app.plan)
+        self.assertEqual(str(self.app.export_button["state"]), "normal")
         self.app.frames[1][0] = "#......"
         self.app._changed()
         self.app._refresh_preview()
@@ -257,8 +257,8 @@ class DesktopTests(unittest.TestCase):
                 self.app.open_pattern()
             self.assertEqual(self.app._project_data(), expected)
             self.app._refresh_preview()
-            self.assertIsNone(self.app.plan)
-            self.assertEqual(str(self.app.export_button["state"]), "disabled")
+            self.assertIsNotNone(self.app.plan)
+            self.assertEqual(str(self.app.export_button["state"]), "normal")
             self.app.frames[1][0] = "#......"
             self.app._changed()
             self.app._refresh_preview()

@@ -1,7 +1,58 @@
 """Stream the project's Ogg track from a beatmap timestamp."""
 
 from io import BytesIO
+import math
 import os
+from pathlib import Path
+import tempfile
+
+
+def audio_duration_ms(data):
+    from mutagen.oggvorbis import OggVorbis
+    return OggVorbis(BytesIO(data)).info.length * 1000
+
+
+def validate_audio_settings(*, speed=1, start_ms=0, trim_start_ms=0):
+    if not all(math.isfinite(v) for v in (speed, start_ms, trim_start_ms)):
+        raise ValueError("音频参数必须是有限数字。")
+    if not .25 <= speed <= 4:
+        raise ValueError("音频倍速须为 0.25–4。")
+    if start_ms < 0 or trim_start_ms < 0:
+        raise ValueError("音频开始时间与截取起点不能小于 0。")
+
+
+def read_audio(path, *, cancel=None):
+    from osu_paint_video import _run_ffmpeg
+    with tempfile.TemporaryDirectory(prefix="osu-paint-audio-") as directory:
+        output = Path(directory) / "source.ogg"
+        _run_ffmpeg(["-protocol_whitelist", "file,pipe", "-i", str(path), "-map", "0:a:0", "-vn",
+                     "-af", "aresample=48000,asetpts=PTS-STARTPTS", "-ac", "2", "-c:a", "libvorbis",
+                     "-q:a", "5", "-map_metadata", "-1", "-map_chapters", "-1", str(output)], cancel)
+        return output.read_bytes()
+
+
+def render_audio(data, *, speed=1, start_ms=0, trim_start_ms=0, cancel=None):
+    from osu_paint_video import _run_ffmpeg, _check_cancel
+    _check_cancel(cancel)
+    validate_audio_settings(speed=speed, start_ms=start_ms, trim_start_ms=trim_start_ms)
+    if trim_start_ms >= audio_duration_ms(data):
+        raise ValueError("截取起点必须早于原音频结束。")
+    filters = [f"atrim=start={trim_start_ms / 1000}", "asetpts=PTS-STARTPTS"]
+    # Keep each atempo stage within its high-quality 0.5–2 range.
+    remaining = speed
+    while remaining < .5 or remaining > 2:
+        part = .5 if remaining < .5 else 2
+        filters.append(f"atempo={part}")
+        remaining /= part
+    filters.extend([f"atempo={remaining}", "aresample=48000",
+                    f"adelay={round(start_ms * 48)}S:all=1", "asetpts=N/SR/TB"])
+    with tempfile.TemporaryDirectory(prefix="osu-paint-audio-") as directory:
+        source, output = Path(directory) / "source.ogg", Path(directory) / "audio.ogg"
+        source.write_bytes(data)
+        _run_ffmpeg(["-protocol_whitelist", "file,pipe", "-i", str(source), "-vn", "-af", ",".join(filters),
+                     "-ac", "2", "-c:a", "libvorbis", "-q:a", "5", "-map_metadata", "-1",
+                     "-map_chapters", "-1", str(output)], cancel)
+        return output.read_bytes()
 
 
 class AudioPreview:

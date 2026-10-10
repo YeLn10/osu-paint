@@ -239,7 +239,7 @@ def _compile_lazer_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, t
         if len(window) != 2 or not all(math.isfinite(v) for v in window) or window[1] <= window[0]:
             raise ValueError(f"第 {i + 1} 帧需要有限的开始、结束时间，且结束 > 开始。")
     for i, window in enumerate(frame_times):
-        if i and window[0] - frame_times[i - 1][1] < transition_ms - 1e-7:
+        if i and window[0] - frame_times[i - 1][1] < (0 if fast_clear else transition_ms) - 1e-7:
             raise ValueError(f"第 {i}、{i + 1} 帧重叠或间隔不足；至少需要 {transition_ms:.3f} ms 切帧。")
     start_ms, end_ms = frame_times[0][0], frame_times[-1][1]
     if start_ms - transition_ms < 100:
@@ -400,6 +400,8 @@ def _compile_lazer_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, t
                 # frame windows. Old video projects benefit on re-export too.
                 # Manual timing must not be stretched to fill the whole gap.
                 duration = sweep_ms * sweep_fraction(index, index + 1)
+                if gap < duration - 1e-7:
+                    raise ValueError(f"第 {index + 1}、{index + 2} 帧间隔不足；当前滚速与画面至少需要 {duration:.6f} ms，实际 {gap:.6f} ms。")
                 entry_start = next_start - duration
                 frame["sweep_start_ms"] = entry_start
                 points.append(Point(entry_start, fast_beat, 10))
@@ -444,7 +446,7 @@ def _compile_lazer_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, t
                 note.update(end_row=top, end_time_ms=times[top], end_y=(top + 1) / len(rows) - inset)
             notes.append(note)
     if not notes:
-        raise ValueError("所有帧均为空白，至少需要一个 #；视频需要包含亮部。")
+        raise ValueError("所有帧均为空白；可以保留空白帧，但整个项目至少需要一个 # 才能生成谱面。")
     notes.sort(key=lambda n: (n["time_ms"], n["column"]))
     last_object_time = max(n.get("end_time_ms", n["time_ms"]) for n in notes)
     base = most_common_beat_length(points, last_object_time)
@@ -508,7 +510,7 @@ def _compile_stable_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, 
         start, end = math.ceil(window[0]), math.floor(window[1])
         if end <= start:
             raise ValueError(f"第 {i + 1} 帧在 stable 整数毫秒对齐后不足 1 ms。")
-        if i and start - windows[-1][1] < transition_ms:
+        if i and start - windows[-1][1] < (0 if fast_clear else transition_ms):
             raise ValueError(f"第 {i}、{i + 1} 帧重叠或间隔不足；stable 至少需要 {transition_ms} ms 切帧。")
         windows.append((start, end))
     start_ms, end_ms = windows[0][0], windows[-1][1]
@@ -559,6 +561,9 @@ def _compile_stable_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, 
         used_rows = sorted({row for _, top, bottom in _note_runs(frames[first], merge_holds)
                             for row in (top, bottom)}, reverse=True) if fast_clear else list(range(height - 1, -1, -1))
         duration = len(used_rows) + 1 if fast_clear else transition_ms
+        if shared_sweep and windows[following][0] - end < duration:
+            gap = windows[following][0] - end
+            raise ValueError(f"第 {last + 1}、{following + 1} 帧间隔不足；stable 当前画面至少需要 {duration} ms，实际 {gap} ms。")
         sweep_ms = max(sweep_ms, duration)
         sweep_start = windows[following][0] - duration if shared_sweep else end
         sweep_end = sweep_start + duration
@@ -606,7 +611,7 @@ def _compile_stable_frames(frames, start_ms=None, end_ms=None, scroll_speed=27, 
                             end_y=1 - (timeline.position(tail) - timeline.position(frame["start_ms"])) / time_range)
             notes.append(note)
     if not notes:
-        raise ValueError("所有帧均为空白，至少需要一个 #；视频需要包含亮部。")
+        raise ValueError("所有帧均为空白；可以保留空白帧，但整个项目至少需要一个 # 才能生成谱面。")
     notes.sort(key=lambda n: (n["time_ms"], n["column"]))
     # Stable's quick header scan uses the last serialized object's endpoint.
     base = most_common_beat_length(points, notes[-1].get("end_time_ms", notes[-1]["time_ms"]), target_client="stable")

@@ -293,13 +293,13 @@ class DesktopVideoTests(unittest.TestCase):
         result = video_result()
         self.open_video_dialog()
         self.assertIsNotNone(self.app.import_dialog)
-        for key, value in dict(fps="2.5", width="2", height="2", start_ms="2500").items():
+        for key, value in dict(fps="2.5", width="2", height="2", start_ms="2500", scroll_speed="15").items():
             self.app.video_fields[key].set(value)
         with patch("osu_paint_desktop.read_video", return_value=result) as importer:
             self.app.video_start_button.invoke()
             self.wait_for(lambda: not self.app.importing)
-        self.assertEqual({key: importer.call_args.kwargs[key] for key in ("fps", "width", "height", "start_ms")},
-                         dict(fps=2.5, width=2, height=2, start_ms=2500))
+        self.assertEqual({key: importer.call_args.kwargs[key] for key in ("fps", "width", "height", "start_ms", "scroll_speed")},
+                         dict(fps=2.5, width=2, height=2, start_ms=2500, scroll_speed=15))
         self.assertEqual(self.app.frames[0], ["..", ".."])
         self.assertEqual(self.app.audio_data, result["audio"])
         self.assertEqual(self.app.timing_mode.get(), "自由模式")

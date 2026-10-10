@@ -103,7 +103,7 @@ class ExportTests(unittest.TestCase):
                         [(2000, 2500), (2500.01, 3000)], [(2000, 2500), (3000, 3000)],
                         [(2000, 2500), (math.nan, 4000)], [(20, 40), (2000, 3000)]):
             with self.subTest(windows=windows), self.assertRaises(ValueError):
-                compile_frames([["#"], ["#"]], frame_times=windows, fast_clear=True)
+                compile_frames([["#."], [".#"]], frame_times=windows, fast_clear=True)
 
     def test_fast_free_timing_at_scroll_speed_extremes_and_many_frames(self):
         for speed in (1, 15, 27, 40):
