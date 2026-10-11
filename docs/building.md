@@ -1,4 +1,4 @@
-# Windows 源码运行与构建
+# 源码运行与构建
 
 只想使用应用，请到 [Releases](https://github.com/YeLn10/osu-paint/releases) 下载 `osu-paint-v版本-windows-x64.zip`，解压后运行 `osu-paint.exe`，无需安装 Python。
 
@@ -77,6 +77,38 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build_desktop.ps1 -Python 
 EXE、构建缓存和环境分别位于 `dist/`、`build/`、`.build-env/`，均被 Git 忽略。仅修改文档、皮肤或发布工具无需重建 EXE；修改应用源码后必须重建并核验。
 
 `tools/verify_package.py` 从根目录 `osu_paint*.py` 和 `osu_paint_app/**/*.py` 收集模块，包括包初始化文件；新增文件无需维护固定模块清单。模块缺失或包内代码与源码不符都会令核验失败。模块职责和对应回归见 [架构的迭代入口](architecture.md#迭代入口)。
+
+## Linux x64
+
+[Linux build](https://github.com/YeLn10/osu-paint/actions/workflows/linux.yml) 在 Ubuntu 22.04 x64、Python 3.11.9 上运行完整测试、PyInstaller 打包、包内核验和启动检查。成功运行的 `linux-x64` 产物保留 14 天，包含 `osu-paint-linux-x64.tar.gz` 和记录模块、媒体组件及二进制 SHA-256 的 `verify-linux-x64.json`。下载 Actions 产物需要登录 GitHub。
+
+解开下载的产物 ZIP，再解开其中的 tar 包并运行：
+
+```bash
+mkdir osu-paint
+tar -xzf osu-paint-linux-x64.tar.gz -C osu-paint
+cd osu-paint
+./osu-paint
+```
+
+包内含应用、使用文档、示例与许可证，无需安装 Python。目标为 Ubuntu 22.04 及更新的 x86_64 桌面环境（glibc 2.35+）；需要 X11 或 Wayland 的 XWayland、系统 Tk 所需的 X11 库及中文字体。其他发行版尚未作为构建基准；Alpine/musl 和 ARM64 不属于此产物的支持范围。tar 包保留可执行权限。当前 Linux 构建通过 Actions 交付，正式 Release 附件清单见[发布指南](releasing.md)。
+
+在 Ubuntu 从源码运行、测试或构建：
+
+```bash
+sudo apt-get update
+sudo apt-get install -y python3-venv python3-tk xvfb xauth fonts-noto-cjk
+python3 -m venv .build-env
+.build-env/bin/python -m pip install -r requirements.txt
+.build-env/bin/python osu_paint_desktop.py
+
+# 完整测试还需 Node.js 24；虚拟显示器允许无桌面的 CI 验证真实 Tk 控件。
+PYTHONUTF8=1 SDL_AUDIODRIVER=dummy xvfb-run -a -s '-screen 0 1920x1080x24' \
+    .build-env/bin/python -m unittest discover -s tests -v
+bash build_desktop.sh python3
+```
+
+`build_desktop.sh` 复用 `.build-env`，生成 `dist/osu-paint`，核验后将它和 Git 跟踪的交付文档、示例、许可证打包到 `dist/osu-paint-linux-x64.tar.gz`。Windows 和 Linux 应使用各自的源码目录及构建环境，PyInstaller 不交叉编译。单独核验可运行 `.build-env/bin/python tools/verify_package.py`；报告中的 `exe_bytes` / `exe_sha256` 在 Linux 上指无扩展名的 ELF 程序。
 
 ## 常见问题
 

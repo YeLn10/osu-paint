@@ -1,0 +1,56 @@
+name: Linux build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    env:
+      PYTHONUTF8: '1'
+      PYGAME_HIDE_SUPPORT_PROMPT: '1'
+      SDL_AUDIODRIVER: dummy
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11.9'
+          architecture: x64
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-tk xvfb xauth fonts-noto-cjk
+          python -m venv .build-env
+          .build-env/bin/python -m pip install -r requirements.txt
+      - name: Run full test suite
+        run: xvfb-run -a -s '-screen 0 1920x1080x24' .build-env/bin/python -m unittest discover -s tests -v
+      - name: Build and verify desktop package
+        run: bash build_desktop.sh python
+      - name: Smoke test packaged app
+        run: |
+          set +e
+          xvfb-run -a -s '-screen 0 1920x1080x24' timeout 10s dist/osu-paint > build/linux-smoke.log 2>&1
+          result=$?
+          cat build/linux-smoke.log
+          test "$result" -eq 124
+      - name: Upload Linux build
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-x64
+          path: |
+            dist/osu-paint-linux-x64.tar.gz
+            dist/verify-linux-x64.json
+          if-no-files-found: error
+          retention-days: 14

@@ -2,12 +2,14 @@
 
 GitHub Actions 在推送 `main`、提交 Pull Request 或手动触发时运行 Windows 完整测试、构建与包内核验；非标签运行只生成 Actions 构建产物。推送形如 `v0.1.0` 的标签时，还会打包并发布 GitHub Release。
 
+独立的 `Linux build` 工作流在相同触发条件下运行 Linux 完整测试、构建、核验和启动检查，生成 `linux-x64` Actions 产物，保留 14 天。当前正式 Release 仍由 Windows 工作流发布；Linux 测试包的下载和运行步骤见[构建指南](building.md#linux-x64)。
+
 ## 发布前
 
 1. 更新 `CHANGELOG.md`，新增版本对应的 `docs/releases/v版本.md`。列出功能、升级方式和已知限制。
 2. 按 [构建教程](building.md) 完成测试、皮肤检查（如有改动）、EXE 构建和包内核验。
 3. 核对 `git status --short`，提交代码和文档。环境、凭据、个人项目和媒体均不要加入 Git。
-4. 推送 `main`，等待 Windows CI 通过。
+4. 推送 `main`，等待 Windows 和 Linux CI 通过。
 
 ## 标签发布
 

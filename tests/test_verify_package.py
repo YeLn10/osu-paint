@@ -58,6 +58,16 @@ class PackageVerificationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "osu_paint_app.project differs"):
             self.verify()
 
+    def test_linux_media_binaries_are_recognised(self):
+        self.archive.toc = {"imageio_ffmpeg/binaries/ffmpeg-linux-x86_64-v7.0.2": None,
+                            "pygame/mixer.cpython-311-x86_64-linux-gnu.so": None}
+        self.assertTrue(self.verify()["media_components_included"])
+
+    def test_ffmpeg_python_module_does_not_replace_the_binary(self):
+        self.archive.toc = {"imageio_ffmpeg/_utils.py": None, "pygame/mixer.pyd": None}
+        with self.assertRaisesRegex(ValueError, "FFmpeg is missing"):
+            self.verify()
+
     def test_missing_extracted_module_is_rejected(self):
         del self.pyz.toc["osu_paint_app.project"]
         with self.assertRaisesRegex(ValueError, "osu_paint_app.project.*missing"):

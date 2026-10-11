@@ -33,7 +33,7 @@ def write_zip(output, files, commit):
                     destination = posixpath.relpath(paths[target], posixpath.dirname(name) or ".")
                 else:
                     destination = (f"https://github.com/YeLn10/osu-paint/blob/{commit}/"
-                                   + quote(target.relative_to(ROOT).as_posix()))
+                                   + quote(target.relative_to(ROOT.resolve()).as_posix()))
                 destination += ("?" + link.query if link.query else "")
                 destination += ("#" + link.fragment if link.fragment else "")
                 return match[1] + destination + match[3]

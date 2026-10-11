@@ -17,6 +17,7 @@ osu_paint_app/           应用层实现，包本身不加载 Tk 或媒体依赖
   theme.py              配色与 Tk 样式
 osu-paint.pyw            无终端窗口的桌面入口
 build_desktop.ps1        Windows EXE 构建入口
+build_desktop.sh         Linux x64 构建、核验与 tar 打包入口
 pixel-film*.osk          两客户端各五套交付皮肤（24 行）
 tools/                  皮肤重建、包内核验、发布打包
 tests/                  回归与合成客户端夹具

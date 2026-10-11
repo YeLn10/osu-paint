@@ -11,6 +11,20 @@ import package_release as release
 
 
 class ReleaseTests(unittest.TestCase):
+    def test_document_links_accept_an_equivalent_unresolved_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            (root / "docs").mkdir()
+            readme = root / "README.md"
+            readme.write_text("[架构](docs/architecture.md#modules)\n", encoding="utf-8")
+            output = root / "app.zip"
+            # Like a Windows 8.3 alias, this spelling resolves to the same directory.
+            with patch.object(release, "ROOT", root / "docs" / ".."):
+                release.write_zip(output, [(readme, "README.md")], "a" * 40)
+            with zipfile.ZipFile(output) as archive:
+                self.assertIn("/docs/architecture.md#modules)",
+                              archive.read("README.md").decode("utf-8"))
+
     def test_archives_keep_user_files_and_resolve_moved_document_links(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

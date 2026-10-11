@@ -1,12 +1,15 @@
 # osu-paint
 
 [![Windows build](https://github.com/YeLn10/osu-paint/actions/workflows/windows.yml/badge.svg)](https://github.com/YeLn10/osu-paint/actions/workflows/windows.yml)
+[![Linux build](https://github.com/YeLn10/osu-paint/actions/workflows/linux.yml/badge.svg)](https://github.com/YeLn10/osu-paint/actions/workflows/linux.yml)
 [![Release](https://img.shields.io/github/v/release/YeLn10/osu-paint)](https://github.com/YeLn10/osu-paint/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 把手绘、`#` / `.` 文本或本地视频变成 osu!lazer / stable mania 的像素图案与动画。支持 1–18 列、逐帧时间、独立音频和连续亮格合并长条，导出谱面及匹配画布的 Pixel Film 皮肤。展示阶段近似静止，通过快速滚动切帧。
 
 **[下载 Windows x64 版](https://github.com/YeLn10/osu-paint/releases/latest)** · [使用指南](docs/usage.md) · [源码构建](docs/building.md) · [更新日志](CHANGELOG.md)
+
+Linux x64 测试构建可在 [Linux build](https://github.com/YeLn10/osu-paint/actions/workflows/linux.yml) 的成功运行中下载 `linux-x64` 产物；解包与运行要求见[构建指南](docs/building.md#linux-x64)。
 
 ![桌面编辑器](docs/desktop.png)
 
