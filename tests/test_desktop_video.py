@@ -63,8 +63,8 @@ class DesktopVideoTests(unittest.TestCase):
         self.assertTrue(condition(), "Background task did not finish")
 
     def open_video_dialog(self):
-        with patch("osu_paint_desktop.filedialog.askopenfilename", return_value="local-video.mp4"), \
-                patch("osu_paint_desktop.messagebox.askyesno", return_value=True):
+        with patch("osu_paint_app.desktop.filedialog.askopenfilename", return_value="local-video.mp4"), \
+                patch("osu_paint_app.desktop.messagebox.askyesno", return_value=True):
             self.app.import_video()
         self.root.update_idletasks()
 
@@ -115,7 +115,7 @@ class DesktopVideoTests(unittest.TestCase):
         self.open_video_dialog()
         self.assertTrue(self.app.video_merge_holds.get())
         self.assertEqual(self.app._project_data(), before)
-        with patch("osu_paint_desktop.read_video", return_value=video_result()) as importer:
+        with patch("osu_paint_app.desktop.read_video", return_value=video_result()) as importer:
             self.app.video_start_button.invoke()
             self.wait_for(lambda: not self.app.importing)
         self.assertTrue(importer.call_args.kwargs["merge_holds"])
@@ -124,7 +124,7 @@ class DesktopVideoTests(unittest.TestCase):
         self.open_video_dialog()
         for key, value in dict(fps="4", width="18", height="2").items():
             self.app.video_fields[key].set(value)
-        with patch("osu_paint_desktop.read_video", return_value=video_result()) as importer:
+        with patch("osu_paint_app.desktop.read_video", return_value=video_result()) as importer:
             self.app.video_start_button.invoke()
             self.wait_for(lambda: not self.app.importing)
         self.assertEqual(importer.call_args.kwargs["width"], 18)
@@ -145,10 +145,10 @@ class DesktopVideoTests(unittest.TestCase):
         self.assertEqual(self.app.video_fields["fps"].get(), "17")
         preview = {"frame": [".#", "#."], "source_ppm": b"P6\n1 1\n255\n\xff\xff\xff",
                    "frame_index": 0, "time_ms": 0}
-        with patch("osu_paint_desktop.preview_video_frame", return_value=preview) as reader:
+        with patch("osu_paint_app.desktop.preview_video_frame", return_value=preview) as reader:
             self.app.video_preview_button.invoke()
             self.wait_for(lambda: not self.app.importing)
-        with patch("osu_paint_desktop.read_video", return_value=video_result()) as importer:
+        with patch("osu_paint_app.desktop.read_video", return_value=video_result()) as importer:
             self.app.video_start_button.invoke()
             self.wait_for(lambda: not self.app.importing)
         for call in (reader.call_args, importer.call_args):
@@ -161,13 +161,13 @@ class DesktopVideoTests(unittest.TestCase):
     def test_fractional_refresh_works_on_lazer_and_invalid_limits_prevent_import(self):
         self.open_video_dialog()
         self.app.video_refresh_hz.set("1001")
-        with patch("osu_paint_desktop.messagebox.showerror") as report, \
-                patch("osu_paint_desktop.read_video") as importer:
+        with patch("osu_paint_app.desktop.messagebox.showerror") as report, \
+                patch("osu_paint_app.desktop.read_video") as importer:
             self.app.video_start_button.invoke()
         report.assert_called_once()
         importer.assert_not_called()
         self.app.video_refresh_hz.set("60000/1001")
-        with patch("osu_paint_desktop.read_video", return_value=video_result()) as importer:
+        with patch("osu_paint_app.desktop.read_video", return_value=video_result()) as importer:
             self.app.video_start_button.invoke()
             self.wait_for(lambda: not self.app.importing)
         self.assertNotIn("game_fps", importer.call_args.kwargs)
@@ -176,7 +176,7 @@ class DesktopVideoTests(unittest.TestCase):
     def test_invalid_fractional_refresh_does_not_start_an_import(self):
         self.open_video_dialog()
         self.app.video_refresh_hz.set("60/0")
-        with patch("osu_paint_desktop.messagebox.showerror") as report, patch("osu_paint_desktop.read_video") as importer:
+        with patch("osu_paint_app.desktop.messagebox.showerror") as report, patch("osu_paint_app.desktop.read_video") as importer:
             self.app.video_start_button.invoke()
         report.assert_called_once()
         importer.assert_not_called()
@@ -246,21 +246,21 @@ class DesktopVideoTests(unittest.TestCase):
             settings = Path(directory) / "播放设置.txt"
             settings.write_text("keep", encoding="utf-8")
             self.app.output_dir.set(directory)
-            with patch("osu_paint_desktop.messagebox.askyesno", return_value=False) as confirm:
+            with patch("osu_paint_app.desktop.messagebox.askyesno", return_value=False) as confirm:
                 self.app.export()
             confirm.assert_called_once()
             self.assertFalse(self.app.exporting)
             self.assertEqual(settings.read_text(encoding="utf-8"), "keep")
             self.app._apply_video(video_result())
-            with patch("osu_paint_desktop.messagebox.askyesno", return_value=False) as confirm:
+            with patch("osu_paint_app.desktop.messagebox.askyesno", return_value=False) as confirm:
                 self.app.export()
             confirm.assert_called_once()
             self.assertFalse(self.app.exporting)
             self.assertEqual(settings.read_text(encoding="utf-8"), "keep")
 
     def test_wide_canvas_and_text_work_without_video_metadata(self):
-        with patch("osu_paint_desktop.simpledialog.askinteger", side_effect=[17, 2]), \
-                patch("osu_paint_desktop.messagebox.showerror") as report:
+        with patch("osu_paint_app.desktop.simpledialog.askinteger", side_effect=[17, 2]), \
+                patch("osu_paint_app.desktop.messagebox.showerror") as report:
             self.app.new_pattern()
         report.assert_not_called()
         self.assertEqual(self.app.frames, [["." * 17] * 2])
@@ -281,8 +281,8 @@ class DesktopVideoTests(unittest.TestCase):
 
     def test_unsupported_key_count_rejects_new_canvas_without_changes(self):
         before = copy.deepcopy(self.app._project_data())
-        with patch("osu_paint_desktop.simpledialog.askinteger", return_value=19) as ask, \
-                patch("osu_paint_desktop.messagebox.showerror") as report:
+        with patch("osu_paint_app.desktop.simpledialog.askinteger", return_value=19) as ask, \
+                patch("osu_paint_app.desktop.messagebox.showerror") as report:
             self.app.new_pattern()
         self.assertEqual(ask.call_count, 1)
         self.assertEqual(ask.call_args.kwargs["maxvalue"], 18)
@@ -295,7 +295,7 @@ class DesktopVideoTests(unittest.TestCase):
         self.assertIsNotNone(self.app.import_dialog)
         for key, value in dict(fps="2.5", width="2", height="2", start_ms="2500", scroll_speed="15").items():
             self.app.video_fields[key].set(value)
-        with patch("osu_paint_desktop.read_video", return_value=result) as importer:
+        with patch("osu_paint_app.desktop.read_video", return_value=result) as importer:
             self.app.video_start_button.invoke()
             self.wait_for(lambda: not self.app.importing)
         self.assertEqual({key: importer.call_args.kwargs[key] for key in ("fps", "width", "height", "start_ms", "scroll_speed")},
@@ -314,7 +314,7 @@ class DesktopVideoTests(unittest.TestCase):
         self.open_video_dialog()
         preview = dict(frame=["##", "##"], source_ppm=b"P6\n320 180\n255\n" + b"\xff" * (320 * 180 * 3),
                        frame_index=0, time_ms=0)
-        with patch("osu_paint_desktop.preview_video_frame", return_value=preview):
+        with patch("osu_paint_app.desktop.preview_video_frame", return_value=preview):
             self.app.video_preview_button.invoke()
             self.wait_for(lambda: not self.app.importing)
         self.assertEqual((self.app.video_source_image.width(), self.app.video_source_image.height()), (480, 270))
@@ -338,7 +338,7 @@ class DesktopVideoTests(unittest.TestCase):
         self.app.video_fit.set("等比裁剪")
         preview = {"frame": [".#", "#."], "source_ppm": b"P6\n1 1\n255\n\xff\xff\xff",
                    "frame_index": 2, "time_ms": 200}
-        with patch("osu_paint_desktop.preview_video_frame", return_value=preview) as reader:
+        with patch("osu_paint_app.desktop.preview_video_frame", return_value=preview) as reader:
             self.app.video_preview_button.invoke()
             self.wait_for(lambda: not self.app.importing)
         args = reader.call_args.kwargs
@@ -351,7 +351,7 @@ class DesktopVideoTests(unittest.TestCase):
         self.assertEqual(len(self.app.video_result_canvas.find_all()), 2)
         self.app.video_fields["threshold"].set("100")
         self.assertIn("刷新", self.app.video_preview_label.get())
-        with patch("osu_paint_desktop.read_video", return_value=video_result()) as importer:
+        with patch("osu_paint_app.desktop.read_video", return_value=video_result()) as importer:
             self.app.video_start_button.invoke()
             self.wait_for(lambda: not self.app.importing)
         self.assertEqual(importer.call_args.kwargs["threshold"], 100)
@@ -360,8 +360,8 @@ class DesktopVideoTests(unittest.TestCase):
     def test_failed_or_cancelled_preview_preserves_project(self):
         before = copy.deepcopy(self.app._project_data())
         self.open_video_dialog()
-        with patch("osu_paint_desktop.preview_video_frame", side_effect=ValueError("帧超出范围")), \
-                patch("osu_paint_desktop.messagebox.showerror"):
+        with patch("osu_paint_app.desktop.preview_video_frame", side_effect=ValueError("帧超出范围")), \
+                patch("osu_paint_app.desktop.messagebox.showerror"):
             self.app.video_preview_button.invoke()
             self.wait_for(lambda: not self.app.importing)
         self.assertEqual(self.app._project_data(), before)
@@ -369,7 +369,7 @@ class DesktopVideoTests(unittest.TestCase):
         def wait_cancel(*args, cancel, **kwargs):
             cancel.wait(4)
             raise ImportCancelled("cancelled")
-        with patch("osu_paint_desktop.preview_video_frame", side_effect=wait_cancel):
+        with patch("osu_paint_app.desktop.preview_video_frame", side_effect=wait_cancel):
             self.app.video_preview_button.invoke()
             self.app.video_cancel_button.invoke()
             self.wait_for(lambda: not self.app.importing)
@@ -391,12 +391,12 @@ class DesktopVideoTests(unittest.TestCase):
         before = copy.deepcopy(self.app._project_data())
         self.open_video_dialog()
         self.app.video_fields["width"].set("19")
-        with patch("osu_paint_desktop.messagebox.showerror"), patch("osu_paint_desktop.read_video") as importer:
+        with patch("osu_paint_app.desktop.messagebox.showerror"), patch("osu_paint_app.desktop.read_video") as importer:
             self.app.video_start_button.invoke()
             importer.assert_not_called()
         self.app.video_fields["width"].set("10")
-        with patch("osu_paint_desktop.messagebox.showerror") as report, \
-                patch("osu_paint_desktop.read_video", side_effect=ValueError("invalid video")):
+        with patch("osu_paint_app.desktop.messagebox.showerror") as report, \
+                patch("osu_paint_app.desktop.read_video", side_effect=ValueError("invalid video")):
             self.app.video_start_button.invoke()
             self.wait_for(lambda: not self.app.importing)
         report.assert_called_once()
@@ -415,10 +415,10 @@ class DesktopVideoTests(unittest.TestCase):
             raise ImportCancelled("已取消视频导入，原项目未改变。")
 
         self.open_video_dialog()
-        with patch("osu_paint_desktop.read_video", side_effect=read):
+        with patch("osu_paint_app.desktop.read_video", side_effect=read):
             self.app.video_start_button.invoke()
             self.assertTrue(started.wait(2))
-            with patch.object(self.root, "destroy") as destroy, patch("osu_paint_desktop.messagebox.showinfo"):
+            with patch.object(self.root, "destroy") as destroy, patch("osu_paint_app.desktop.messagebox.showinfo"):
                 self.app.close()
                 destroy.assert_not_called()
             self.app.video_cancel_button.invoke()
@@ -429,7 +429,7 @@ class DesktopVideoTests(unittest.TestCase):
     def test_cancel_wins_race_with_already_completed_worker(self):
         before = copy.deepcopy(self.app._project_data())
         self.open_video_dialog()
-        with patch("osu_paint_desktop.read_video", return_value=video_result()):
+        with patch("osu_paint_app.desktop.read_video", return_value=video_result()):
             self.app.video_start_button.invoke()
             # Wait for the worker without dispatching the Tk completion handler.
             deadline = time.monotonic() + 2
@@ -447,7 +447,7 @@ class DesktopVideoTests(unittest.TestCase):
         self.assertEqual(base64.b64decode(expected["audio"]), result["audio"])
         with tempfile.TemporaryDirectory() as directory:
             project = Path(directory) / "视频项目.json"
-            with patch("osu_paint_desktop.filedialog.asksaveasfilename", return_value=str(project)):
+            with patch("osu_paint_app.desktop.filedialog.asksaveasfilename", return_value=str(project)):
                 self.app.save_pattern()
             self.assertFalse(self.app.dirty)
             self.app.load_text("#", keep_video=False)
@@ -482,8 +482,8 @@ class DesktopVideoTests(unittest.TestCase):
         self.app._apply_video(video_result())
         self.app.load_text("..\n..\n---\n.#\n..")
         self.assertIsNotNone(self.app.audio_data)
-        with patch("osu_paint_desktop.messagebox.askyesno", return_value=True), \
-                patch("osu_paint_desktop.simpledialog.askinteger", side_effect=[2, 2]):
+        with patch("osu_paint_app.desktop.messagebox.askyesno", return_value=True), \
+                patch("osu_paint_app.desktop.simpledialog.askinteger", side_effect=[2, 2]):
             self.app.new_pattern()
         self.assertIsNone(self.app.audio_data)
         self.assertIsNone(self.app.video)
@@ -491,8 +491,8 @@ class DesktopVideoTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "pattern.txt"
             source.write_text("#", encoding="utf-8")
-            with patch("osu_paint_desktop.messagebox.askyesno", return_value=True), \
-                    patch("osu_paint_desktop.filedialog.askopenfilename", return_value=str(source)):
+            with patch("osu_paint_app.desktop.messagebox.askyesno", return_value=True), \
+                    patch("osu_paint_app.desktop.filedialog.askopenfilename", return_value=str(source)):
                 self.app.open_pattern()
         self.assertIsNone(self.app.audio_data)
         self.assertIsNone(self.app.video)
@@ -519,7 +519,7 @@ class DesktopVideoTests(unittest.TestCase):
             release.wait(4)
             write_output(plan, output, audio_data=audio_data)
 
-        with tempfile.TemporaryDirectory() as directory, patch("osu_paint_desktop.write_output", side_effect=write):
+        with tempfile.TemporaryDirectory() as directory, patch("osu_paint_app.desktop.write_output", side_effect=write):
             self.app.output_dir.set(directory)
             self.app.export()
             self.app._apply_video(video_result(b"OggS replacement"))
@@ -534,7 +534,7 @@ class DesktopVideoTests(unittest.TestCase):
             audio = Path(directory) / "audio.ogg"
             audio.write_bytes(b"keep")
             self.app.output_dir.set(directory)
-            with patch("osu_paint_desktop.messagebox.askyesno", return_value=False) as confirm:
+            with patch("osu_paint_app.desktop.messagebox.askyesno", return_value=False) as confirm:
                 self.app.export()
             confirm.assert_called_once()
             self.assertFalse(self.app.exporting)
@@ -544,7 +544,7 @@ class DesktopVideoTests(unittest.TestCase):
         self.app._apply_video(video_result())
         self.app.timing_mode.set("均分模式")
         with tempfile.TemporaryDirectory() as directory, \
-                patch("osu_paint_desktop.filedialog.asksaveasfilename", return_value=str(Path(directory) / "frames.txt")):
+                patch("osu_paint_app.desktop.filedialog.asksaveasfilename", return_value=str(Path(directory) / "frames.txt")):
             self.app.save_pattern()
         self.assertTrue(self.app.dirty)
         self.assertIsNotNone(self.app.audio_data)

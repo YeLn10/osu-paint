@@ -42,11 +42,11 @@ class DesktopTests(unittest.TestCase):
         self.app.load_project(saved)
         self.assertFalse(self.app.merge_holds.get())
         with patch.object(self.app, "_can_discard", return_value=True), \
-                patch("osu_paint_desktop.simpledialog.askinteger", side_effect=[2, None]):
+                patch("osu_paint_app.desktop.simpledialog.askinteger", side_effect=[2, None]):
             self.app.new_pattern()
         self.assertEqual(self.app._project_data(), saved)
         with patch.object(self.app, "_can_discard", return_value=True), \
-                patch("osu_paint_desktop.simpledialog.askinteger", side_effect=[2, 3]):
+                patch("osu_paint_app.desktop.simpledialog.askinteger", side_effect=[2, 3]):
             self.app.new_pattern()
         self.assertTrue(self.app.merge_holds.get())
         self.assertEqual(self.app.frames, [[".."] * 3])
@@ -85,7 +85,7 @@ class DesktopTests(unittest.TestCase):
         self.assertGreater(y2 - y1, 20)
 
     def test_help_describes_only_mania_playback(self):
-        with patch("osu_paint_desktop.messagebox.showinfo") as info:
+        with patch("osu_paint_app.desktop.messagebox.showinfo") as info:
             self.app.explain_timing()
         help_text = info.call_args.args[1]
         self.assertNotIn("补丁", help_text)
@@ -144,7 +144,7 @@ class DesktopTests(unittest.TestCase):
         expected = self.app._project_data()
         with tempfile.TemporaryDirectory() as directory:
             filename = Path(directory) / "自由项目.json"
-            with patch("osu_paint_desktop.filedialog.asksaveasfilename", return_value=str(filename)):
+            with patch("osu_paint_app.desktop.filedialog.asksaveasfilename", return_value=str(filename)):
                 self.app.save_pattern()
             self.assertFalse(self.app.dirty)
             self.assertEqual(json.loads(filename.read_text(encoding="utf-8")), expected)
@@ -247,13 +247,13 @@ class DesktopTests(unittest.TestCase):
         expected = self.app._project_data()
         with tempfile.TemporaryDirectory() as directory:
             filename = Path(directory) / "未完成.json"
-            with patch("osu_paint_desktop.filedialog.asksaveasfilename", return_value=str(filename)), \
-                    patch("osu_paint_desktop.messagebox.showerror") as error:
+            with patch("osu_paint_app.desktop.filedialog.asksaveasfilename", return_value=str(filename)), \
+                    patch("osu_paint_app.desktop.messagebox.showerror") as error:
                 self.app.save_pattern()
             error.assert_not_called()
             self.assertFalse(self.app.dirty)
             self.app.frames = [HEART.copy()]
-            with patch("osu_paint_desktop.filedialog.askopenfilename", return_value=str(filename)):
+            with patch("osu_paint_app.desktop.filedialog.askopenfilename", return_value=str(filename)):
                 self.app.open_pattern()
             self.assertEqual(self.app._project_data(), expected)
             self.app._refresh_preview()
@@ -268,11 +268,11 @@ class DesktopTests(unittest.TestCase):
         self.app.fields["end_ms"].set("6000")
         with tempfile.TemporaryDirectory() as directory:
             filename = Path(directory) / "图案.txt"
-            with patch("osu_paint_desktop.filedialog.asksaveasfilename", return_value=str(filename)):
+            with patch("osu_paint_app.desktop.filedialog.asksaveasfilename", return_value=str(filename)):
                 self.app.save_pattern()
             self.assertTrue(filename.exists())
             self.assertTrue(self.app.dirty)
-            with patch("osu_paint_desktop.messagebox.askyesno", return_value=False) as confirm:
+            with patch("osu_paint_app.desktop.messagebox.askyesno", return_value=False) as confirm:
                 self.app.close()
             confirm.assert_called_once()
             self.assertTrue(self.root.winfo_exists())
@@ -364,7 +364,7 @@ class DesktopTests(unittest.TestCase):
             output = Path(directory)
             (output / "report.json").write_text("keep", encoding="utf-8")
             self.app.output_dir.set(directory)
-            with patch("osu_paint_desktop.messagebox.askyesno", return_value=False) as confirm:
+            with patch("osu_paint_app.desktop.messagebox.askyesno", return_value=False) as confirm:
                 self.app.export()
             confirm.assert_called_once()
             self.assertFalse(self.app.exporting)
@@ -375,7 +375,7 @@ class DesktopTests(unittest.TestCase):
             skin = Path(directory) / "pixel-film-16x10.osk"
             skin.write_bytes(b"keep")
             self.app.output_dir.set(directory)
-            with patch("osu_paint_desktop.messagebox.askyesno", return_value=False) as confirm:
+            with patch("osu_paint_app.desktop.messagebox.askyesno", return_value=False) as confirm:
                 self.app.export()
             confirm.assert_called_once()
             self.assertFalse(self.app.exporting)
@@ -386,7 +386,7 @@ class DesktopTests(unittest.TestCase):
             output = Path(directory) / "not-a-directory"
             output.write_text("keep", encoding="utf-8")
             self.app.output_dir.set(str(output))
-            with patch("osu_paint_desktop.messagebox.showerror") as report:
+            with patch("osu_paint_app.desktop.messagebox.showerror") as report:
                 self.app.export()
                 self.wait_for_export()
             report.assert_called_once()
@@ -404,28 +404,28 @@ class DesktopTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             filename = Path(directory) / "绘图.txt"
             self.app.dirty = True
-            with patch("osu_paint_desktop.filedialog.asksaveasfilename", return_value=str(filename)):
+            with patch("osu_paint_app.desktop.filedialog.asksaveasfilename", return_value=str(filename)):
                 self.app.save_pattern()
             self.assertTrue(self.app.dirty)
             self.assertEqual(parse_frames(filename.read_text(encoding="utf-8")), [HEART])
             filename.write_text("\ufeff#.\n.#\n", encoding="utf-8")
-            with patch("osu_paint_desktop.filedialog.askopenfilename", return_value=str(filename)), \
-                    patch("osu_paint_desktop.messagebox.askyesno", return_value=True):
+            with patch("osu_paint_app.desktop.filedialog.askopenfilename", return_value=str(filename)), \
+                    patch("osu_paint_app.desktop.messagebox.askyesno", return_value=True):
                 self.app.open_pattern()
             self.assertEqual(self.app.frames, [["#.", ".#"]])
             self.app.dirty = True
-            with patch("osu_paint_desktop.messagebox.askyesno", return_value=False), patch("osu_paint_desktop.filedialog.askopenfilename") as choose:
+            with patch("osu_paint_app.desktop.messagebox.askyesno", return_value=False), patch("osu_paint_app.desktop.filedialog.askopenfilename") as choose:
                 self.app.open_pattern()
             choose.assert_not_called()
 
     def test_close_is_blocked_during_export_or_unsaved_changes(self):
         with patch.object(self.root, "destroy") as destroy:
             self.app.exporting = True
-            with patch("osu_paint_desktop.messagebox.showinfo"):
+            with patch("osu_paint_app.desktop.messagebox.showinfo"):
                 self.app.close()
             self.app.exporting = False
             self.app.dirty = True
-            with patch("osu_paint_desktop.messagebox.askyesno", return_value=False):
+            with patch("osu_paint_app.desktop.messagebox.askyesno", return_value=False):
                 self.app.close()
             destroy.assert_not_called()
 

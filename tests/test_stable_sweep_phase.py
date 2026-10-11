@@ -27,7 +27,7 @@ def dense_video(*, changes=64, fps=15, hz=60, origin=2000, merged=True):
     with tempfile.TemporaryDirectory() as directory:
         source = Path(directory) / "synthetic.mp4"
         source.touch()
-        with patch("osu_paint_video._run_ffmpeg", side_effect=decode):
+        with patch("osu_paint_video.run_ffmpeg", side_effect=decode):
             return import_video(source, width=16, height=12, fps=fps, refresh_hz=hz,
                                 start_ms=origin, merge_holds=merged, target_client="stable")["plan"]
 

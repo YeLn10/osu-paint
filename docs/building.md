@@ -68,13 +68,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build_desktop.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\build_desktop.ps1 -Python "C:\Python311\python.exe"
 ```
 
-随后核验 EXE 内的五个项目模块与当前源码一致，并检查音视频组件：
+随后核验 EXE 内的根目录项目模块及 `osu_paint_app/` 下的全部 Python 模块与当前源码一致，并检查音视频组件：
 
 ```powershell
 .\.build-env\Scripts\python.exe tools/verify_package.py
 ```
 
 EXE、构建缓存和环境分别位于 `dist/`、`build/`、`.build-env/`，均被 Git 忽略。仅修改文档、皮肤或发布工具无需重建 EXE；修改应用源码后必须重建并核验。
+
+`tools/verify_package.py` 从根目录 `osu_paint*.py` 和 `osu_paint_app/**/*.py` 收集模块，包括包初始化文件；新增文件无需维护固定模块清单。模块缺失或包内代码与源码不符都会令核验失败。模块职责和对应回归见 [架构的迭代入口](architecture.md#迭代入口)。
 
 ## 常见问题
 

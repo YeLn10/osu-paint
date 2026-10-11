@@ -93,7 +93,7 @@ class DesktopClientTests(unittest.TestCase):
             captured.append(plan)
             entered.set()
             release.wait(3)
-        with tempfile.TemporaryDirectory() as directory, patch("osu_paint_desktop.write_output", side_effect=export):
+        with tempfile.TemporaryDirectory() as directory, patch("osu_paint_app.desktop.write_output", side_effect=export):
             self.app.target_client.set("stable")
             self.app.output_dir.set(directory)
             self.app.export()
@@ -110,8 +110,8 @@ class DesktopClientTests(unittest.TestCase):
         self.assertEqual(self.app.plan["target_client"], "lazer")
 
     def open_video_dialog(self):
-        with patch("osu_paint_desktop.filedialog.askopenfilename", return_value="synthetic.mp4"), \
-                patch("osu_paint_desktop.messagebox.askyesno", return_value=True):
+        with patch("osu_paint_app.desktop.filedialog.askopenfilename", return_value="synthetic.mp4"), \
+                patch("osu_paint_app.desktop.messagebox.askyesno", return_value=True):
             self.app.import_video()
         self.root.update_idletasks()
 
@@ -130,7 +130,7 @@ class DesktopClientTests(unittest.TestCase):
         self.assertEqual(self.app.video_fields["height"].get(), "12")
         self.assertEqual(self.app._project_data(), before)
         preview = dict(frame=["#."], source_ppm=b"P6\n1 1\n255\n\xff\xff\xff", frame_index=0, time_ms=0)
-        with patch("osu_paint_desktop.preview_video_frame", return_value=preview) as reader:
+        with patch("osu_paint_app.desktop.preview_video_frame", return_value=preview) as reader:
             self.app.video_preview_button.invoke()
             self.wait_for_import()
         self.assertEqual(reader.call_args.kwargs["target_client"], "stable")
@@ -140,7 +140,7 @@ class DesktopClientTests(unittest.TestCase):
                               fast_clear=True, merge_holds=True, target_client="stable")
         video = dict(filename="synthetic.mp4", fps=10, width=2, height=12, start_ms=2000, duration_ms=200)
         result = dict(plan=plan, video=video, audio=b"OggS synthetic")
-        with patch("osu_paint_desktop.read_video", return_value=result) as reader:
+        with patch("osu_paint_app.desktop.read_video", return_value=result) as reader:
             self.app.video_start_button.invoke()
             self.wait_for_import()
         self.assertEqual(reader.call_args.kwargs["target_client"], "stable")

@@ -17,7 +17,8 @@ except ImportError:
     imageio_ffmpeg = None
 
 from osu_paint import encode_osu, write_output
-from osu_paint_video import (ImportCancelled, _run_ffmpeg, import_video, preview_video_frame,
+from osu_paint_app.ffmpeg import run_ffmpeg
+from osu_paint_video import (ImportCancelled, import_video, preview_video_frame,
                              resolve_video_options, validate_video_options)
 
 
@@ -47,7 +48,7 @@ class VideoValidationTests(unittest.TestCase):
 
     def test_missing_dependency_has_actionable_error(self):
         with patch.dict(sys.modules, {"imageio_ffmpeg": None}), self.assertRaisesRegex(ValueError, "requirements.txt"):
-            _run_ffmpeg([], None)
+            run_ffmpeg([], None)
 
 
 @unittest.skipUnless(imageio_ffmpeg, "Install requirements.txt for real FFmpeg tests")
@@ -224,8 +225,8 @@ class VideoImportTests(unittest.TestCase):
 
         timer.start()
         try:
-            with patch("osu_paint_video.subprocess.Popen", side_effect=spawn), self.assertRaises(ImportCancelled):
-                _run_ffmpeg(["-re", "-stream_loop", "-1", "-i", str(self.silent), "-f", "null", "-"], cancel)
+            with patch("osu_paint_app.ffmpeg.subprocess.Popen", side_effect=spawn), self.assertRaises(ImportCancelled):
+                run_ffmpeg(["-re", "-stream_loop", "-1", "-i", str(self.silent), "-f", "null", "-"], cancel)
         finally:
             timer.cancel()
             timer.join()

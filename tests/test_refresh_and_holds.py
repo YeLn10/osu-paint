@@ -30,7 +30,7 @@ def synthetic_video(count=2400, fps=20, **options):
     with tempfile.TemporaryDirectory() as directory:
         source = Path(directory) / "synthetic.mp4"
         source.touch()
-        with patch("osu_paint_video._run_ffmpeg", side_effect=decode):
+        with patch("osu_paint_video.run_ffmpeg", side_effect=decode):
             return import_video(source, fps=fps, width=2, height=3, **options)
 
 

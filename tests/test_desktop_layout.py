@@ -70,7 +70,7 @@ class DesktopLayoutTests(unittest.TestCase):
         self.app.load_text("#\n")
         self.app._refresh_preview()
         self.assertIn("100", self.app.playback_hint.get())
-        with patch("osu_paint_desktop.messagebox.showinfo") as show:
+        with patch("osu_paint_app.desktop.messagebox.showinfo") as show:
             self.app.explain_timing()
         self.assertIn("11/13/15/17K", show.call_args.args[1])
         self.assertIn("零", show.call_args.args[1])
@@ -90,7 +90,7 @@ class DesktopLayoutTests(unittest.TestCase):
 
     def test_video_dialog_keeps_inputs_and_actions_visible(self):
         self.root.deiconify()
-        with patch("osu_paint_desktop.filedialog.askopenfilename", return_value="synthetic.mp4"):
+        with patch("osu_paint_app.desktop.filedialog.askopenfilename", return_value="synthetic.mp4"):
             self.app.import_video()
         self.root.update()
         dialog = self.app.import_dialog

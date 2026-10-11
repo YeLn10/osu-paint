@@ -22,7 +22,7 @@ def video_sequence(client, *, repeat=1, changes=64, hz=60, height=24, merged=Tru
     with tempfile.TemporaryDirectory() as directory:
         source = Path(directory) / 'synthetic.mp4'
         source.touch()
-        with patch('osu_paint_video._run_ffmpeg', side_effect=decode):
+        with patch('osu_paint_video.run_ffmpeg', side_effect=decode):
             result = import_video(source, fps=fps, width=2, height=height, start_ms=origin,
                                   refresh_hz=hz, merge_holds=merged, target_client=client)
     return result['plan']

@@ -46,7 +46,7 @@ class DesktopAudioTests(unittest.TestCase):
         self.assertTrue(condition())
 
     def open_import(self):
-        with patch("osu_paint_desktop.filedialog.askopenfilename", return_value=str(self.source)):
+        with patch("osu_paint_app.desktop.filedialog.askopenfilename", return_value=str(self.source)):
             self.app.import_audio()
 
     def test_real_import_edit_round_trip_preview_and_export_share_audio(self):
@@ -93,8 +93,8 @@ class DesktopAudioTests(unittest.TestCase):
         self.app.audio_cancel_button.invoke()
         self.assertEqual(self.app._project_data(), before)
         self.open_import()
-        with patch("osu_paint_desktop.read_audio", side_effect=ValueError("无音轨")), \
-                patch("osu_paint_desktop.messagebox.showerror") as error:
+        with patch("osu_paint_app.desktop.read_audio", side_effect=ValueError("无音轨")), \
+                patch("osu_paint_app.desktop.messagebox.showerror") as error:
             self.app.audio_apply_button.invoke()
             self.wait_for(lambda: not self.app.importing)
             error.assert_called_once()
@@ -107,7 +107,7 @@ class DesktopAudioTests(unittest.TestCase):
             cancel.wait(3)
             raise ImportCancelled("cancelled")
 
-        with patch("osu_paint_desktop.read_audio", side_effect=slow_read):
+        with patch("osu_paint_app.desktop.read_audio", side_effect=slow_read):
             self.app.audio_apply_button.invoke()
             self.assertTrue(entered.wait(2))
             self.app.audio_cancel_button.invoke()

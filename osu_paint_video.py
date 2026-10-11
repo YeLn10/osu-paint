@@ -4,18 +4,14 @@ from fractions import Fraction
 import math
 from pathlib import Path
 import re
-import subprocess
 import tempfile
 
 from osu_paint import SUPPORTED_KEY_COUNTS, compile_frames, minimum_transition_ms, number
+from osu_paint_app.ffmpeg import ImportCancelled, check_cancel, run_ffmpeg
 
 
 MAX_VIDEO_FRAMES = 20000
 MAX_VIDEO_PIXELS = 2000000
-
-
-class ImportCancelled(Exception):
-    pass
 
 
 def resolve_video_options(*, fps, width, height, start_ms, scroll_speed,
@@ -112,7 +108,7 @@ def preview_video_frame(path, *, frame_index=0, fps=10, width=10, height=None, s
                    "[src]scale=320:180:force_original_aspect_ratio=decrease,"
                    "pad=320:180:(ow-iw)/2:(oh-ih)/2,format=rgb24[source];"
                    f"[pixels]{_scale_filter(width, height, fit)}[result]")
-        _run_ffmpeg(["-protocol_whitelist", "file,pipe", "-i", str(Path(path).resolve()),
+        run_ffmpeg(["-protocol_whitelist", "file,pipe", "-i", str(Path(path).resolve()),
                      "-filter_complex", filters, "-map", "[source]", "-frames:v", "1", str(source),
                      "-map", "[result]", "-frames:v", "1", "-f", "rawvideo", str(raw)], cancel)
         if not raw.exists() or raw.stat().st_size != width * height or not source.exists():
@@ -121,42 +117,6 @@ def preview_video_frame(path, *, frame_index=0, fps=10, width=10, height=None, s
                                      contrast=contrast, invert=invert),
                 "source_ppm": source.read_bytes(), "frame_index": frame_index,
                 "time_ms": frame_index * 1000 / fps}
-
-
-def _check_cancel(cancel):
-    if cancel is not None and cancel.is_set():
-        raise ImportCancelled("已取消视频导入，原项目未改变。")
-
-
-def _run_ffmpeg(arguments, cancel):
-    try:
-        from imageio_ffmpeg import get_ffmpeg_exe
-        executable = get_ffmpeg_exe()
-    except (ImportError, RuntimeError) as error:
-        raise ValueError("缺少视频处理组件。源码运行请先执行 python -m pip install -r requirements.txt；"
-                         "独立 EXE 请使用包含视频功能的新版。") from error
-    command = [executable, "-nostdin", "-hide_banner", "-nostats", "-y", "-xerror", *arguments]
-    _check_cancel(cancel)
-    with subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                          stderr=subprocess.PIPE,
-                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)) as process:
-        try:
-            while True:
-                _check_cancel(cancel)
-                try:
-                    _, stderr = process.communicate(timeout=0.1)
-                    break
-                except subprocess.TimeoutExpired:
-                    continue
-        except BaseException:
-            process.kill()
-            process.communicate()
-            raise
-        _check_cancel(cancel)
-        log = stderr.decode("utf-8", errors="replace")
-        if process.returncode:
-            raise ValueError("视频或音轨处理失败（文件可能损坏或格式不支持）：\n" + log[-1600:])
-        return log
 
 
 def _transition_phases(frame_plans, *, step=1):
@@ -246,10 +206,10 @@ def import_video(path, *, fps=10, width=10, height=None, start_ms=2000, scroll_s
     path = Path(path).expanduser().resolve()
     if not path.is_file():
         raise ValueError("请选择存在的本地视频文件。")
-    _check_cancel(cancel)
+    check_cancel(cancel)
 
     def report(message):
-        _check_cancel(cancel)
+        check_cancel(cancel)
         if progress is not None:
             progress(message)
 
@@ -262,7 +222,7 @@ def import_video(path, *, fps=10, width=10, height=None, start_ms=2000, scroll_s
         # Timestamp-based resampling handles variable-rate video without cumulative drift.
         # A tiny grayscale raw file bounds memory and lets cancellation reap FFmpeg reliably.
         filters = f"fps=fps={number(fps)}:start_time=0:round=up," + _scale_filter(width, height, fit)
-        log = _run_ffmpeg(["-protocol_whitelist", "file,pipe", "-i", str(path), "-map", "0:v:0",
+        log = run_ffmpeg(["-protocol_whitelist", "file,pipe", "-i", str(path), "-map", "0:v:0",
                            "-vf", filters, "-frames:v", str(limit + 1), "-an", "-f", "rawvideo", str(raw)], cancel)
         pixels = raw.read_bytes()
         count, remainder = divmod(len(pixels), frame_size)
@@ -351,7 +311,7 @@ def import_video(path, *, fps=10, width=10, height=None, start_ms=2000, scroll_s
                         any(end - start < (1 if target_client == "stable" else 1e-7)
                             for start, end in spread_windows)):
                     continue
-                _check_cancel(cancel)
+                check_cancel(cancel)
                 candidate = compile_frames(frames, scroll_speed=scroll_speed, frame_times=spread_windows,
                                            fast_clear=True, allow_empty_frames=True, anchor_reference=True,
                                            merge_holds=merge_holds, target_client=target_client)
@@ -418,7 +378,7 @@ def import_video(path, *, fps=10, width=10, height=None, start_ms=2000, scroll_s
                             for a, b in zip(spread_starts[:-2], spread_starts[1:-1]))
                             and all(end - start >= 1 for start, end in spread_windows)
                             and spread_starts != [f["start_ms"] for f in plan["frames"]] + [plan["end_ms"]]):
-                        _check_cancel(cancel)
+                        check_cancel(cancel)
                         candidate = compile_frames(frames, scroll_speed=scroll_speed, frame_times=spread_windows,
                                                    fast_clear=True, allow_empty_frames=True, anchor_reference=True,
                                                    merge_holds=merge_holds, target_client=target_client)
@@ -438,12 +398,12 @@ def import_video(path, *, fps=10, width=10, height=None, start_ms=2000, scroll_s
             # Keep the input's relative stream timestamps, including delayed audio starts.
             # Strip original metadata; the exported project never needs the private source path.
             delay_samples = round(start_ms * 48)
-            _run_ffmpeg(["-protocol_whitelist", "file,pipe", "-i", str(path), "-map", "0:a:0", "-vn",
+            run_ffmpeg(["-protocol_whitelist", "file,pipe", "-i", str(path), "-map", "0:a:0", "-vn",
                          "-af", f"aresample=48000:async=1:first_pts=0,adelay={delay_samples}S:all=1",
                          "-ac", "2", "-c:a", "libvorbis", "-q:a", "5",
                          "-map_metadata", "-1", "-map_chapters", "-1", str(audio)], cancel)
             audio_data = audio.read_bytes()
-        _check_cancel(cancel)
+        check_cancel(cancel)
     video = {"filename": path.name, "fps": fps, "width": width, "height": height,
              "start_ms": start_ms, "duration_ms": count * period,
              "threshold": threshold, "brightness": brightness, "contrast": contrast, "invert": invert, "fit": fit}

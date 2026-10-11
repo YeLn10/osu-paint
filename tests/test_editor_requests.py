@@ -34,7 +34,7 @@ class EditorRequestTests(unittest.TestCase):
         self.assertEqual(self.app._text(), text)
 
     def test_video_import_owns_its_scroll_speed(self):
-        with patch("osu_paint_desktop.filedialog.askopenfilename", return_value="synthetic.mp4"):
+        with patch("osu_paint_app.desktop.filedialog.askopenfilename", return_value="synthetic.mp4"):
             self.app.import_video()
         self.assertIn("scroll_speed", self.app.video_fields)
         self.app.video_fields["scroll_speed"].set("15")

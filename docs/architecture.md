@@ -6,10 +6,15 @@
 
 ```text
 osu_paint.py             编译器、位置模型、导出与 CLI
-osu_paint_desktop.py     Tk 编辑器与项目管理
+osu_paint_desktop.py     桌面启动入口与兼容导入
 osu_paint_video.py       视频转换与刷新率排帧
 osu_paint_audio.py       音轨编辑与播放
 osu_paint_skin.py        皮肤构建
+osu_paint_app/           应用层实现，包本身不加载 Tk 或媒体依赖
+  desktop.py            Tk 编辑器、交互、预览与后台任务协调
+  project.py            项目数据与 v1–v3 JSON 转换、校验
+  ffmpeg.py             音视频共用的可取消子进程执行
+  theme.py              配色与 Tk 样式
 osu-paint.pyw            无终端窗口的桌面入口
 build_desktop.ps1        Windows EXE 构建入口
 pixel-film*.osk          两客户端各五套交付皮肤（24 行）
@@ -22,14 +27,17 @@ docs/                   使用、设计、构建和发布文档
 licenses/               第三方原始许可证
 ```
 
-五个模块保留在根目录，共用同一编译器与导出路径；桌面入口和现有导入方式保持直接可用。
+根目录保留共用编译器、音视频和皮肤接口以及启动脚本。`osu_paint_desktop.py` 只提供 `PaintApp`、`main` 和原有示例常量的兼容导入，桌面实现集中在应用包；源码启动、双击入口与 EXE 使用同一个 `main`。
 
 | 模块 | 职责与依赖 |
 | --- | --- |
 | `osu_paint.py` | 解析文本、编译帧、积分位置、编码 `.osu`、写出文件与 CLI。谱面及位置模型的唯一实现，只依赖标准库；CLI 视频分支按需导入视频模块。 |
-| `osu_paint_video.py` | 参数解析、可取消 FFmpeg 执行、视频抽帧、提取 Ogg、安排刷新窗口；调用核心编译器，以 `imageio-ffmpeg` 定位 FFmpeg。 |
-| `osu_paint_audio.py` | 音频导入、倍速/截取/偏移、播放与定位；复用视频模块的 FFmpeg 执行器，按需加载 pygame / mutagen，不参与谱面编译。 |
-| `osu_paint_desktop.py` | Tk 编辑、JSON 保存与恢复、连续位置预览、异步导入和导出；主线程管理控件与项目状态。 |
+| `osu_paint_video.py` | 参数解析、视频抽帧、提取 Ogg、安排刷新窗口；调用核心编译器和共用 FFmpeg 执行器。 |
+| `osu_paint_audio.py` | 音频导入、倍速/截取/偏移、播放与定位；直接使用共用 FFmpeg 执行器，按需加载 pygame / mutagen，不依赖视频或谱面编译器。 |
+| `osu_paint_app.desktop` | Tk 编辑、连续位置预览、文件对话框及读写、异步导入和导出；主线程管理控件与项目状态。 |
+| `osu_paint_app.project` | `Project.from_data` 完整校验 JSON 并返回数据，`Project.to_data` 编码可保存的草稿；复用核心及音视频参数校验，不创建控件、读写文件或解码媒体。 |
+| `osu_paint_app.ffmpeg` | `run_ffmpeg` 定位并执行 FFmpeg，处理错误、取消与进程回收；`check_cancel` 与 `ImportCancelled` 为音视频共用，不依赖编辑器或编译器。 |
+| `osu_paint_app.theme` | `configure_theme(root, scale)` 配置 Tk 样式；不读取项目状态。 |
 | `osu_paint_skin.py` | 生成配置、PNG 和 `.osk`；仅依赖标准库，由导出与 `tools/build_skin.py` 共用。 |
 
 ```mermaid
@@ -48,6 +56,21 @@ flowchart LR
 ```
 
 HTML 只使用计划中的位置，无声；音轨同步播放由桌面端负责。
+
+应用包的 `__init__.py` 保持无副作用；导入项目数据或媒体工具不会间接加载 Tk、pygame、mutagen 或 imageio-ffmpeg。媒体库只在实际播放、解码或执行时加载，文字编译与皮肤构建继续只需标准库。
+
+## 迭代入口
+
+| 要修改的行为 | 实现位置 | 优先验证 |
+| --- | --- | --- |
+| 项目字段、旧版本兼容与媒体内嵌 | `osu_paint_app/project.py` | `test_project.py`，再检查 `test_desktop*.py` 的保存、打开与失败保留状态 |
+| 编辑动作、窗口、预览与任务结果应用 | `osu_paint_app/desktop.py` | `test_desktop*.py`、`test_editor_requests.py` |
+| 桌面配色和控件样式 | `osu_paint_app/theme.py` | `test_desktop_layout.py` 与真实 Tk 交互 |
+| FFmpeg 执行、取消与进程回收 | `osu_paint_app/ffmpeg.py` | `test_video.py`、`test_audio.py`、`test_app_imports.py` |
+| 编译、客户端数值与刷新率排帧 | `osu_paint.py`、`osu_paint_video.py` | 先读 [时间模型](timing.md)，运行对应客户端与排帧回归 |
+| 应用模块增删或移动 | 相关模块、`tools/verify_package.py` | `test_app_imports.py`、`test_verify_package.py`，然后重建并核验 EXE |
+
+项目格式回归直接调用数据接口，桌面回归仍通过原入口创建真实 `PaintApp`。需要替换外部调用时，在实现查找名称的位置替换，例如 `osu_paint_app.desktop.read_video`，而非启动脚本。完整检查始终按 [构建指南](building.md) 执行。
 
 ## 编译与导出接口
 
@@ -72,6 +95,8 @@ HTML 只使用计划中的位置，无声；音轨同步播放由桌面端负责
 - 旧 `game_fps` / `frame_fps` / `refresh_phase_ms` 忽略，不恢复游戏 FPS 控件或手动相位输入。
 - TXT 只保存图案；`report.json` 是编译报告，不能打开为项目。项目保存原媒体文件名，排除绝对路径。
 
+打开 JSON 时，桌面先调用 `Project.from_data`，全部校验成功后才将结果应用到 Tk 状态。保存时先读取控件和均分时间，再调用 `Project.to_data`。项目数据允许空白画面及尚未填完的时间文本；保存草稿与能否编译导出是两个独立检查。
+
 `audio_track.leading_ms` 记录旧视频音轨已补的前导静音。编辑时先扣除它，再按原轨执行 `atrim`、保留音高的 `atempo` 和按样本计算的延迟，避免重复偏移或对上次变速结果再次变速。成功后才替换最终音轨。音频编辑不改变帧时间或刷新对齐，画面排帧也不移动音轨。
 
 ## 编辑状态、线程与副作用
@@ -82,7 +107,7 @@ HTML 只使用计划中的位置，无声；音轨同步播放由桌面端负责
 
 Tk 控件只在主线程操作。导入及选帧预览在后台运行，通过取消事件终止 FFmpeg、队列交回结果，成功后由主线程应用；失败或取消保留项目。导出点击时重新编译并抓取计划与音轨，后台写文件，后续编辑不改变正在导出的快照。
 
-音乐预览跟随音频时钟，音轨结束后画面继续。更改滚速、帧时间、时间模式或画布尺寸后移除失效的刷新对齐信息。参数解析与编译尽量保持纯函数；写文件集中于导出、项目保存和独立皮肤构建，媒体子进程集中于视频模块。
+音乐预览跟随音频时钟，音轨结束后画面继续。更改滚速、帧时间、时间模式或画布尺寸后移除失效的刷新对齐信息。参数解析与编译尽量保持纯函数；写文件集中于导出、桌面项目保存和独立皮肤构建，媒体子进程集中于 `osu_paint_app.ffmpeg`。
 
 ## 验证与文件管理
 
