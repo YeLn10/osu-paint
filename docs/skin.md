@@ -1,70 +1,67 @@
-# Pixel Film：lazer / stable 皮肤
+# Pixel Film 皮肤
 
-应用按所选客户端生成独立的 lazer / stable 皮肤。生成器可写 1–18K，两套各含全部 18 个配置；下文先描述 lazer（最初核查 2026-10-01），stable 差异见末节。两端的列宽和高键数规则不能混用。
+[使用指南](usage.md) · [构建指南](building.md) · [研究索引](research/README.md)
 
-## 安装
+## 选择与安装
 
-用当前应用重新导出，导入 `pattern.osz`，再双击该次导出目录中匹配游戏窗口比例的 `.osk`，在对应客户端设置中选择该皮肤。已有同名皮肤时覆盖并重新载入。使用向下滚动、No Fail、与生成时相同的滚速以及默认舞台缩放。旧谱面的位置和尺寸不会因替换皮肤自动更新，必须重新导出。
+用当前程序导出，分别导入 `pattern.osz` 和该次导出目录中匹配客户端、窗口比例的 `.osk`，在游戏中选择皮肤。已有同名版本时覆盖并重新载入，使用向下滚动、相同滚速、默认舞台缩放和 No Fail。
 
-## 常用屏幕比例
+每次导出只生成目标客户端的五个比例，行高匹配实际画布。根目录和独立皮肤发布包中的十套皮肤默认 24 行；更换行数或更新位置算法后，应重新导出并同时更新谱面与皮肤。
 
-| 文件 | 屏幕 / 游戏窗口示例 |
+| 窗口比例 | lazer 文件 | stable 文件 |
+| --- | --- | --- |
+| 16:10（默认，如 3072×1920） | `pixel-film-16x10.osk` | `pixel-film-stable-16x10.osk` |
+| 16:9（如 1920×1080） | `pixel-film-16x9.osk` | `pixel-film-stable-16x9.osk` |
+| 4:3（如 1024×768） | `pixel-film-4x3.osk` | `pixel-film-stable-4x3.osk` |
+| 2560×1080 | `pixel-film-2560x1080.osk` | `pixel-film-stable-2560x1080.osk` |
+| 3440×1440 | `pixel-film-3440x1440.osk` | `pixel-film-stable-3440x1440.osk` |
+
+同一比例适用于多种分辨率，皮肤内部名称标明客户端、比例和行数。两客户端皮肤不可混用；旧导出目录中的历史文件不会自动删除。
+
+## 布局与客户端限制
+
+两套均包含 1–18K 配置。共同使用 `HitPosition: 480`、`WidthForNoteHeightScale: 480 / H`（H 为行数），列间距和列线为零。底边锚点、展示漂移与判定余量由 [时间模型](timing.md) 定义。
+
+| 项目 | lazer | stable |
+| --- | --- | --- |
+| 列宽 | `480 × 窗口宽高比 / 键数`，无每列 100 上限 | 同一公式再钳制到每列最多 100，16:10 至少 8 列才能横向铺满 |
+| 舞台 | 目标 `2026.921.0-lazer` 的 >10K 强制双舞台 | `SplitStages: 0` 合并 1–18K，保留奇数列 |
+| 高键数 | 11/13/15/17K 分别变成 10/12/14/16 列；12/14/16/18K 保留列数但拆分 | 支持全部 1–18K |
+| 1K 间距 | 按常规配置 | 必须省略 `ColumnSpacing`，空列表导致原生加载失败 |
+| 底边资源 | 透明 `StageBottom` | 固定不透明白色遮挡，见下节 |
+
+lazer 的 [legacy 解析器](https://github.com/ppy/osu/blob/master/osu.Game/Skinning/LegacyManiaSkinDecoder.cs) 直接读取列宽；[舞台配置](https://github.com/ppy/osu/blob/master/osu.Game/Skinning/LegacyManiaSkinConfiguration.cs) 未实现 `SplitStages` / `StageSeparation`，这些字段不写入 lazer 皮肤。[转换器](https://github.com/ppy/osu/blob/master/osu.Game.Rulesets.Mania/Beatmaps/ManiaBeatmapConverter.cs) 在上述目标版本中对 >10K 先整数除 2 再建立两个等宽舞台，皮肤无法恢复丢列。链接供定位，结论以记录的目标版本为界。
+
+stable 另设 `SpecialStyle: 0`、`ColumnStart: 0`、`ColumnRight: 0`，提供透明判定与警告资源。字段限制及原生解析依据见 [stable 皮肤证据](research/stable-skin-evidence.md)。
+
+## 黑色资源与边缘采样
+
+舞台背景为不透明白色，音符全部纯黑 `(0,0,0,255)`：
+
+| 资源 | 尺寸与用途 |
 | --- | --- |
-| `pixel-film-16x10.osk` | 16:10：3072×1920、1920×1200、2560×1600 |
-| `pixel-film-16x9.osk` | 16:9：1280×720、1920×1080、2560×1440、3840×2160 |
-| `pixel-film-4x3.osk` | 4:3：1024×768、1600×1200 |
-| `pixel-film-2560x1080.osk` | 2560×1080 |
-| `pixel-film-3440x1440.osk` | 3440×1440 |
+| 短音符、长条头尾 | 1024×1024，保持正方形比例 |
+| 长条身体 | 40×1024，拉伸连接头尾 |
+| 边框、键位、灯光、判定线 | 透明隐藏 |
 
-默认版本对应用户的 3072×1920。同一比例可用于多种像素尺寸。列宽为 `480 × 窗口宽高比 / 键数`，列间距和列线为零。lazer 的 [legacy 皮肤解析器](https://github.com/ppy/osu/blob/master/osu.Game/Skinning/LegacyManiaSkinDecoder.cs) 直接读取列宽，没有每列最大 100 的钳制；因此低键数可以保留真实键数并铺满横向。旧的宽度上限和其他客户端专用舞台配置已移除。
+贴图尺寸不等于屏幕音符尺寸，实际行高仍由 `480 / H` 控制。[LegacyBodyPiece](https://github.com/ppy/osu/blob/master/osu.Game.Rulesets.Mania/Skinning/Legacy/LegacyBodyPiece.cs) 的 Miss 颜色乘算保持黑色，整体 Alpha 淡出及物件生命周期仍由客户端决定。
 
-## 纵向位置与黑色长条
+**黑色 PNG 不等于绘制后纯黑。** 目标 `2026.921.0-lazer` 的框架使用 1024 图集，两侧各留 24，单图可用高度 976。纯黑边缘上传优化只比较 RGB，会跳过透明黑边缘；线性过滤因此混入透明像素。旧 40×1 身体四分之一处 Alpha 为 0.75，旧 40×40 头尾在边缘/角落分别为 0.5 / 0.25，白底混合后出现灰白线。
 
-判定位置为 `HitPosition: 480`，音符高度为 `WidthForNoteHeightScale: 480 / H`，H 是本次画布行数。每次导出都会生成匹配实际 H 的五个皮肤；根目录交付包默认仅对应 24 行。更换画布行数后需导入该次导出的皮肤。
+当前两类贴图的高度都超过 976，[TextureStore](https://github.com/ppy/osu-framework/blob/master/osu.Framework/Graphics/Textures/TextureStore.cs) 因而使用独立纹理与 `ClampToEdge`。框架策略探测和软件插值回归确认 Alpha 为 1；头尾边缘/角落的五比例 125 个采样中，旧资源 120 个失败，新资源全部通过。单张共享正方形资源的未压缩 RGBA 为 4 MiB，不是每个音符各占 4 MiB。
 
-lazer 向下滚动的 [legacy 音符贴图](https://github.com/ppy/osu/blob/master/osu.Game.Rulesets.Mania/Skinning/Legacy/LegacyNotePiece.cs) 按底边锚定。生成器将第 row 行底边放在 `(row + 1) / H`，再扣除整幅复用画面的漂移和约 `1 / 768` 的判定余量。贴图向上延伸一行，顶部按屏幕裁剪；底部余量约为 1 个内部像素，3072×1920 下约 2.5 屏幕像素，展示开始还包含微小漂移余量。这避免底部头音符在展示期间提前进入判定并淡出。桌面和 HTML 采用相同底边几何，修复原中心模型造成的半格偏移。
+修改这些尺寸或采样策略必须保留边缘插值回归。此证据不能代替 GPU 实机、stable 采样或判定淡出验收；只更新 EXE 或谱面也不会替换游戏里已安装的旧皮肤。
 
-每列背景为不透明白色，普通音符、长条头尾均引用 1024×1024 不透明纯黑 PNG，身体引用 40×1024 不透明纯黑 PNG 并拉伸。头尾贴图保持原 40×40 的正方形宽高比，实际音符高度仍由 `WidthForNoteHeightScale: 480 / H` 决定，不是把音符画成 1024 像素高。所有像素都是 `(0,0,0,255)`，中间不使用灰色或半透明资源。lazer [LegacyBodyPiece](https://github.com/ppy/osu/blob/master/osu.Game.Rulesets.Mania/Skinning/Legacy/LegacyBodyPiece.cs) 的 Miss 颜色乘算仍会让纯黑保持黑色；客户端的整体淡出及物件生命周期不能由贴图取消。舞台边框、键位、灯光和判定线资源透明。
+## stable 固定底部遮挡
 
-截图中的灰色来自贴图采样。已安装的 `2026.921.0-lazer` 所带框架采用 1024 像素纹理图集，两边各预留 24 像素，单图可用高度为 976。图集边缘上传优化只比较 RGB，纯黑边缘会被当成已有黑色而跳过上传，透明边缘于是保留下来。原来的 40×1 身体被拉伸时，线性过滤混入透明边缘，在白色背景上显成灰色；检查 PNG 本身的 RGBA 不足以发现这一问题。
+`StageBottom` 按键数引用 `pixel-bottom-N.png`，是白色舞台遮挡，音符头尾与身体仍全黑。高度为 1 个皮肤坐标单位，即舞台高度的 `1/480`，1920 高窗口约 4 像素。它配合编译器缩小画面间距，遮挡离场边缘。
 
-新的身体高度 1024 超过图集可用高度，[TextureStore](https://github.com/ppy/osu-framework/blob/master/osu.Framework/Graphics/Textures/TextureStore.cs) 因而使用独立纹理和 `ClampToEdge`，采样不再混入图集透明边缘。此修复只更换皮肤资源，不改客户端。诊断对已安装框架的图集策略进行了探测，再独立计算线性采样：旧资源四分之一处 Alpha 为 0.75，新资源为 1，白底混合结果从灰色变成纯黑。
+原生舞台层以底部中心为原点，在音符之后绘制，不自动拉伸宽度；各贴图宽度因此取对应键数实际总列宽向上取整，低键数仍受 100 上限约束。五比例共 90 个配置已用目标 stable 原生解析器验证资源映射，PNG 检查覆盖不透明白色与尺寸。
 
-2026-10-03 补齐头尾边缘修复：此前只处理长条身体，普通短音符及长条头尾的 40×40 贴图仍会进入同一个图集。它们在边界也会混入透明黑色：边缘中心 Alpha 为 0.5，角落为 0.25，在白色舞台上出现灰白细线，亚像素移动时明暗随采样位置变化。改为 1024×1024 正方形贴图后，同样走独立纹理与 `ClampToEdge`，不改变长宽比、判定位置或谱面几何。共享贴图的未压缩 RGBA 数据从约 6 KiB 增至 4 MiB，这是单张资源大小，不是每个音符各占 4 MiB。
-
-新增采样回归覆盖五种交付皮肤、水平／垂直边缘和角落共 125 个位置，旧资源有 120 个采样失败，新资源全部为不透明黑色；原长条身体采样和整幅位置回归继续保留。此项基于已记录的目标框架图集行为和软件插值模型，没有宣称消除客户端淡出、有限切帧间隙或显示器实机的全部白线。需导入匹配画布行数的新版 `.osk`，覆盖同名皮肤并重新载入；只替换 EXE 或谱面不会更新已安装皮肤。
-
-原包的短音符为白色，长条头尾透明，只有 16K 配置，其他键数会回退。现在为全部 1–18K 指定完整黑色资源，删除无用白色音符贴图。
-
-## 原版 lazer 的高键数边界
-
-[LegacyManiaSkinConfiguration](https://github.com/ppy/osu/blob/master/osu.Game/Skinning/LegacyManiaSkinConfiguration.cs) 尚未实现 `SplitStages` / `StageSeparation`。这些字段无法强制 lazer 合并舞台，已从当前皮肤移除。
-
-[ManiaBeatmapConverter](https://github.com/ppy/osu/blob/master/osu.Game.Rulesets.Mania/Beatmaps/ManiaBeatmapConverter.cs) 在已安装 `2026.921.0-lazer` 中对原生 mania 的 >10 列先整数除 2，再建立两个等列数舞台。12/14/16/18K 保留列数但拆分，11/13/15/17K 分别变为 10/12/14/16 列。皮肤不能恢复转换时丢掉的列。1–10K 可以采用整幅宽度配置；早期文档将边界写为 >9K，本次以目标程序集的执行结果更正。
+**此修改需同时更新 `.osz` 与本次导出的 stable `.osk`。** 已有 JSON 重新导出即可，帧时间和音轨不动，不必重抽视频。原生移动对照中的内部白缝已消除，但整数裁剪仍可能短暂露出长条底边，有限换帧与未知相位依然存在；尚无 GPU 实机验收。机制和反例见 [stable 白缝记录](research/stable-white-seam.md)。
 
 ## 构建与验证
 
-```powershell
-python tools/build_skin.py
-python -m unittest discover -s tests -p test_skin.py -v
-```
+皮肤由 `osu_paint_skin.py` 唯一生成，`tools/build_skin.py` 默认重建根目录十套 24 行交付包；`--client lazer` / `stable` 可单独构建，`--rows 13` 可指定行数，提交前恢复默认两端 24 行。环境与命令见 [构建指南](building.md#皮肤构建)。
 
-指定行数可用 `python tools/build_skin.py --rows 13`，提交前恢复默认 24 行。构建模块只用标准库，固定 ZIP 元数据；根目录十个 `.osk`（两端各五个） 必须能从源码逐字节复现。
-
-回归检查所有键数与比例的配置、实际 RGBA、图集分配及边缘线性采样、资源引用、判定位置、按导出行数生成的高度及可复现性。位置检查重新解析 `.osu` 并独立积分，Node / Tk 检查全宽布局、底边锚点、行间连续和长条跨度。验证没有启动游戏；框架策略探测和采样计算不能替代 GPU 实机显示、判定淡出、舞台缩放或刷新相位验收。
-
-2026-10-03 交付验证：完整 137 项回归通过；按脚本重建根目录五个皮肤与 EXE，核对五个内置模块与源码一致，执行包内桌面入口确认默认长条，并从包内构建模块逐字节复现五套交付皮肤。边缘对照与验收摘要分别为 `build/white-edge-comparison.json`、`build/white-edge-validation.json`；缓存不进入 Git。
-
-## 统一工具的 stable 皮肤
-
-默认构建两套，各含上述五个比例；`--client lazer` / `--client stable` 可单独构建。默认 16:10 文件名分别为 `pixel-film-16x10.osk`、`pixel-film-stable-16x10.osk`，内部名称也注明 `16:10` 和实际行数。其他比例同样写入文件名，stable 另有客户端后缀。根目录两套均为 24 行，实际导出按画布行数生成所选客户端的五套，不能混用。2026-10-08 起默认包补齐比例后缀；已有导出目录中的旧名称文件不会自动删除。
-
-stable 使用 `SplitStages: 0`、`SpecialStyle: 0`、`ColumnStart: 0`、`ColumnRight: 0`，合并 1–18K 并保留奇数列。每列宽度最多 100，所以低键数不会横向铺满（16:10 至少 8 列）；预览使用相同舞台宽度。1K 省略 `ColumnSpacing`，空列表会使原生皮肤加载失败。stable 额外提供透明判定/警告资源。头尾与身体沿用相同纯黑 PNG，但 lazer 的图集证据不能替代 stable GPU 验收。
-
-2026-10-09 起，stable 的 `StageBottom` 改为固定不透明白色遮挡，按每个键数引用 `pixel-bottom-N.png`。高度为 1 个皮肤坐标单位，即默认 480 高舞台的 `1/480`；3072×1920 视口下约 4 个屏幕像素。该层遮住缩小换帧间距后留在底部的离场边缘，取代此前约 2.5 屏幕像素的判定余量作为最终可见边界。它是舞台资源，音符、头尾及身体仍全部不透明纯黑。
-
-原生 `StageBottom` 以舞台底部中心为原点，在音符之后绘制，不自动拉伸宽度；因此各贴图宽为该键数实际总列宽向上取整，低键数仍按每列 100 的上限计算。五种比例的 90 个配置均经本机 stable 原生解析器确认映射，另验证全部 PNG 为白色不透明及宽高覆盖。lazer 继续使用透明 `StageBottom`，原有黑色贴图尺寸及边缘插值回归保留。
-
-**这项修改必须一起更新 `.osz` 和该次导出的 stable `.osk`。** 已有 JSON 可直接打开后重新导出，帧时间与音轨不动，不需要重新抽取视频。根目录交付皮肤仍是 24 行，12 行视频应使用其导出目录中的版本。原生移动数据复核消除了合成输入的内部移动白缝，但整数裁剪仍能短暂露出长条底边，有限换帧和未知显示相位也仍存在；尚无 GPU 实机验收。复现、差分与证据见 [stable 白缝修复](research/stable-white-seam.md)。
-
-目标二进制、字段限制和依据见 [stable 皮肤证据](research/stable-skin-evidence.md)。原相邻 stable 工具未删除，合并不修改游戏安装或配置。
+构建仅依赖标准库、固定 ZIP 元数据，交付包必须逐字节复现。回归检查所有键数与比例、资源引用、RGBA、图集与边缘采样、判定位置和导出行高；序列化积分及 Node / Tk 检查底边、行间连续与长条跨度。模型和原生解析结果不能保证所有显示相位下零残影。

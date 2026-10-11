@@ -47,7 +47,9 @@ node --version
 
 `SDL_AUDIODRIVER=dummy` 让音频回归使用静音输出设备。测试仍实际解码合成音视频，并创建 Tk 窗口验证编辑行为。Node.js 不可用时部分 HTML 检查会跳过；发布前应安装它并运行完整测试。结束测试后可用 `Remove-Item Env:SDL_AUDIODRIVER` 恢复正常播放。
 
-修改皮肤时重建全部交付包，并确认回归：
+## 皮肤构建
+
+修改皮肤时重建全部十个默认 24 行交付包，并确认回归；资源约束见 [皮肤说明](skin.md)：
 
 ```powershell
 .\.build-env\Scripts\python.exe tools/build_skin.py
@@ -72,7 +74,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build_desktop.ps1 -Python 
 .\.build-env\Scripts\python.exe tools/verify_package.py
 ```
 
-EXE、构建缓存和环境分别位于 `dist/`、`build/`、`.build-env/`，均被 Git 忽略。单独修改文档或皮肤无需重建 EXE；修改应用源码后必须重建。
+EXE、构建缓存和环境分别位于 `dist/`、`build/`、`.build-env/`，均被 Git 忽略。仅修改文档、皮肤或发布工具无需重建 EXE；修改应用源码后必须重建并核验。
 
 ## 常见问题
 
