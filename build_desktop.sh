@@ -15,9 +15,5 @@ fi
     --distpath "$root/dist" --workpath "$root/build" --specpath "$root/build" "$root/osu-paint.pyw"
 "$build_python" "$root/tools/verify_package.py" --exe "$root/dist/osu-paint" > "$root/dist/verify-linux-x64.json"
 
-# Tar preserves executable permissions; only tracked documentation and examples are included.
-git -C "$root" ls-files -z -- README.md CHANGELOG.md LICENSE THIRD_PARTY_NOTICES.md \
-    docs/usage.md docs/skin.md docs/desktop.png examples licenses > "$root/build/linux-package-files"
-tar -czf "$root/dist/osu-paint-linux-x64.tar.gz" -C "$root/dist" osu-paint \
-    -C "$root" --null -T "$root/build/linux-package-files"
-printf 'Built: %s\n' "$root/dist/osu-paint-linux-x64.tar.gz"
+# Preserve executable permissions and resolve links to documentation outside the bundle.
+"$build_python" "$root/tools/package_linux.py"

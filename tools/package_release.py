@@ -3,16 +3,54 @@
 import argparse
 import hashlib
 from importlib.metadata import version as package_version
+import io
 import json
 from pathlib import Path
 import platform
 import posixpath
 import re
 import subprocess
+import tarfile
 from urllib.parse import quote, unquote, urlsplit
 import zipfile
 
 from verify_package import ROOT, verify_package
+
+
+def document_bytes(source, paths, commit):
+    def rewrite_link(match):
+        # Keep bundled links local; pin omitted references to the same source revision.
+        link = urlsplit(match[2])
+        if link.scheme or link.netloc or not link.path:
+            return match[0]
+        target = (source.parent / unquote(link.path)).resolve()
+        if target in paths:
+            destination = posixpath.relpath(paths[target], posixpath.dirname(paths[source.resolve()]) or ".")
+        else:
+            destination = (f"https://github.com/YeLn10/osu-paint/blob/{commit}/"
+                           + quote(target.relative_to(ROOT.resolve()).as_posix()))
+        destination += ("?" + link.query if link.query else "")
+        destination += ("#" + link.fragment if link.fragment else "")
+        return match[1] + destination + match[3]
+
+    markdown = re.sub(r"(\[[^\]\n]*\]\()([^\s)]+)(\))", rewrite_link,
+                      source.read_text(encoding="utf-8"))
+    return markdown.encode("utf-8")
+
+
+def write_tar(output, files, commit):
+    paths = {source.resolve(): name for source, name in files}
+    with tarfile.open(output, "w:gz") as archive:
+        for source, name in files:
+            content = (document_bytes(source, paths, commit) if source.suffix == ".md"
+                       else source.read_bytes())
+            info = archive.gettarinfo(str(source), arcname=name)
+            info.size = len(content)
+            info.uid = info.gid = 0
+            info.uname = info.gname = ""
+            if name == "osu-paint":
+                info.mode = 0o755
+            archive.addfile(info, io.BytesIO(content))
 
 
 def write_zip(output, files, commit):
@@ -23,24 +61,7 @@ def write_zip(output, files, commit):
                 archive.write(source, name)
                 continue
 
-            def rewrite_link(match):
-                # Keep bundled links local; pin omitted references to the same source revision.
-                link = urlsplit(match[2])
-                if link.scheme or link.netloc or not link.path:
-                    return match[0]
-                target = (source.parent / unquote(link.path)).resolve()
-                if target in paths:
-                    destination = posixpath.relpath(paths[target], posixpath.dirname(name) or ".")
-                else:
-                    destination = (f"https://github.com/YeLn10/osu-paint/blob/{commit}/"
-                                   + quote(target.relative_to(ROOT.resolve()).as_posix()))
-                destination += ("?" + link.query if link.query else "")
-                destination += ("#" + link.fragment if link.fragment else "")
-                return match[1] + destination + match[3]
-
-            markdown = re.sub(r"(\[[^\]\n]*\]\()([^\s)]+)(\))", rewrite_link,
-                              source.read_text(encoding="utf-8"))
-            archive.writestr(name, markdown)
+            archive.writestr(name, document_bytes(source, paths, commit))
     with zipfile.ZipFile(output) as archive:
         if archive.testzip() is not None:
             raise ValueError(f"Invalid release archive: {output.name}")

@@ -1,6 +1,7 @@
 import hashlib
 from pathlib import Path
 import sys
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -11,6 +12,32 @@ import package_release as release
 
 
 class ReleaseTests(unittest.TestCase):
+    def test_linux_archive_resolves_omitted_docs_and_keeps_executable_mode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            (root / "docs").mkdir()
+            readme = root / "README.md"
+            readme.write_text("[使用](docs/usage.md) [构建](docs/building.md#linux-x64)\n",
+                              encoding="utf-8")
+            usage = root / "docs/usage.md"
+            usage.write_text("[首页](../README.md)\n", encoding="utf-8")
+            executable = root / "osu-paint"
+            executable.write_bytes(b"synthetic executable")
+            output = root / "linux.tar.gz"
+            with patch.object(release, "ROOT", root):
+                release.write_tar(output, [(executable, "osu-paint"), (readme, "README.md"),
+                                           (usage, "docs/usage.md")], "a" * 40)
+            with tarfile.open(output) as archive:
+                self.assertEqual(set(archive.getnames()),
+                                 {"osu-paint", "README.md", "docs/usage.md"})
+                self.assertEqual(archive.extractfile("osu-paint").read(), b"synthetic executable")
+                self.assertTrue(archive.getmember("osu-paint").mode & 0o111)
+                markdown = archive.extractfile("README.md").read().decode("utf-8")
+                self.assertIn("[使用](docs/usage.md)", markdown)
+                self.assertIn(f"/blob/{'a' * 40}/docs/building.md#linux-x64)", markdown)
+                self.assertEqual(archive.extractfile("docs/usage.md").read().decode("utf-8"),
+                                 "[首页](../README.md)\n")
+
     def test_document_links_accept_an_equivalent_unresolved_root(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

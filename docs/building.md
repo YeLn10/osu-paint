@@ -1,6 +1,6 @@
 # 源码运行与构建
 
-只想使用应用，请到 [Releases](https://github.com/YeLn10/osu-paint/releases) 下载 `osu-paint-v版本-windows-x64.zip`，解压后运行 `osu-paint.exe`，无需安装 Python。
+只想使用应用，请到 [Releases](https://github.com/YeLn10/osu-paint/releases/latest) 下载 `osu-paint-v版本-windows-x64.zip`，解压后运行 `osu-paint.exe`，无需安装 Python。Linux x64 试用包也在同一页面，运行要求见下方 [Linux x64](#linux-x64)。
 
 ## 准备环境
 
@@ -80,18 +80,20 @@ EXE、构建缓存和环境分别位于 `dist/`、`build/`、`.build-env/`，均
 
 ## Linux x64
 
-[Linux build](https://github.com/YeLn10/osu-paint/actions/workflows/linux.yml) 在 Ubuntu 22.04 x64、Python 3.11.9 上运行完整测试、PyInstaller 打包、包内核验和启动检查。成功运行的 `linux-x64` 产物保留 14 天，包含 `osu-paint-linux-x64.tar.gz` 和记录模块、媒体组件及二进制 SHA-256 的 `verify-linux-x64.json`。下载 Actions 产物需要登录 GitHub。
+[Releases](https://github.com/YeLn10/osu-paint/releases/latest) 提供 `osu-paint-v版本-linux-x64.tar.gz` 试用包，无需登录 GitHub；用同版本的 `SHA256SUMS.txt` 校验下载文件。
 
-解开下载的产物 ZIP，再解开其中的 tar 包并运行：
+以 v0.1.1 为例，解开 tar 包并运行：
 
 ```bash
 mkdir osu-paint
-tar -xzf osu-paint-linux-x64.tar.gz -C osu-paint
+tar -xzf osu-paint-v0.1.1-linux-x64.tar.gz -C osu-paint
 cd osu-paint
 ./osu-paint
 ```
 
-包内含应用、使用文档、示例与许可证，无需安装 Python。目标为 Ubuntu 22.04 及更新的 x86_64 桌面环境（glibc 2.35+）；需要 X11 或 Wayland 的 XWayland、系统 Tk 所需的 X11 库及中文字体。其他发行版尚未作为构建基准；Alpine/musl 和 ARM64 不属于此产物的支持范围。tar 包保留可执行权限。当前 Linux 构建通过 Actions 交付，正式 Release 附件清单见[发布指南](releasing.md)。
+包内含应用、使用文档、示例与许可证，无需安装 Python。目标为 Ubuntu 22.04 及更新的 x86_64 桌面环境（glibc 2.35+）；需要 X11 或 Wayland 的 XWayland、系统 Tk 所需的 X11 库及中文字体。其他发行版尚未作为构建基准；Alpine/musl 和 ARM64 不属于此产物的支持范围。tar 包保留可执行权限。Linux 当前仍为试用版，CI 启动检查不代表所有实机与发行版均已验证；Release 附件清单见[发布指南](releasing.md)。
+
+[Linux build](https://github.com/YeLn10/osu-paint/actions/workflows/linux.yml) 在 Ubuntu 22.04 x64、Python 3.11.9 上运行完整测试、PyInstaller 打包、包内核验和启动检查。开发构建的 `linux-x64` Actions 产物保留 14 天，包含未带版本号的 tar 包及 `verify-linux-x64.json`，下载需要登录 GitHub。标签发布复用同一工作流，测试包在 Windows 发布流程成功后一起成为 Release 附件。
 
 在 Ubuntu 从源码运行、测试或构建：
 
@@ -108,7 +110,7 @@ PYTHONUTF8=1 SDL_AUDIODRIVER=dummy xvfb-run -a -s '-screen 0 1920x1080x24' \
 bash build_desktop.sh python3
 ```
 
-`build_desktop.sh` 复用 `.build-env`，生成 `dist/osu-paint`，核验后将它和 Git 跟踪的交付文档、示例、许可证打包到 `dist/osu-paint-linux-x64.tar.gz`。Windows 和 Linux 应使用各自的源码目录及构建环境，PyInstaller 不交叉编译。单独核验可运行 `.build-env/bin/python tools/verify_package.py`；报告中的 `exe_bytes` / `exe_sha256` 在 Linux 上指无扩展名的 ELF 程序。
+`build_desktop.sh` 复用 `.build-env`，生成 `dist/osu-paint`，核验后通过 `tools/package_linux.py` 将它和 Git 跟踪的交付文档、示例、许可证打包到 `dist/osu-paint-linux-x64.tar.gz`。包内文档链接与 Windows 共用修正规则，未附带的文档指向同一提交的 GitHub 文件。Windows 和 Linux 应使用各自的源码目录及构建环境，PyInstaller 不交叉编译。单独核验可运行 `.build-env/bin/python tools/verify_package.py`；报告中的 `exe_bytes` / `exe_sha256` 在 Linux 上指无扩展名的 ELF 程序。
 
 ## 常见问题
 
